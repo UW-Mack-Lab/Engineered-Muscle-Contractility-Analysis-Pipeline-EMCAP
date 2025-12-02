@@ -7,7 +7,7 @@ Welcome to the Engineered Muscle Contractility Analysis Pipeline! (EMCAP) This s
 **Version:** 1.0  
 **License:** MIT License  
 
-> **Need the full manual?** > [📄 **Click here to view or download the complete User Guide (PDF)**](docs/Muscle_Kinetics_User_Guide.pdf)
+> **Need the full manual?** > [📄 **Click here to view or download the complete User Guide (PDF)**](docs/README%20USER%20GUIDE.pdf)
 
 ---
 
