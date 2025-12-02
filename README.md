@@ -7,10 +7,10 @@ Welcome to the Engineered Muscle Contractility Analysis Pipeline! (EMCAP) This s
 **Version:** 1.0  
 **License:** MIT License  
 
-> **Need the full manual?**
+> **Need the full manual?** Go to User Guide to access the PDF
 >
-> [📄 **Click here to view or download the complete User Guide (PDF)**](docs/README_USER_GUIDE.pdf)
 
+---
 ---
 
 ## Citation
@@ -104,26 +104,22 @@ Reference JSON files are included to replicate the specific stimulation timings 
 * **Logic:** Searches for peak **after T0** (Stimulation Start).
 * **Metrics:** Calculates time to peak (TTP) and relaxation times (R50, R90) relative to the baseline.
 
-![Diagram of single muscle twitch showing T0, Peak, and Relaxation phases](images/twitch_kinetics_diagram.png)
 
 ### 5.2 Fatigue Analysis
 * **Purpose:** Tracks force decline across 4 distinct blocks and calculates Fatigue Resistance Index (FRI).
 * **Logic:** Identifies the peak for every stimulation to track the "envelope" of force decline over time.
 
-![Graph showing muscle fatigue force decline over time](images/fatigue_drop_graph.png)
 
 ### 5.3 Continuous (75Hz) Analysis
 * **Purpose:** Tetanic contractions.
 * **Logic (Dual Approach):** 1. **Kinetics Peak:** Searches near T1 (Stim End) for relaxation timing.
     2. **Max Tetanic Force:** Searches T0 to T1+200ms for absolute strength.
 
-![Graph of fused tetanic contraction showing plateau](images/tetanic_contraction.png)
 
 ### 5.4 Force-Frequency (FvF) Analysis
 * **Purpose:** Force-vs-Frequency relationships.
 * **Logic:** Uses the Dual Approach to capture the step-wise increase in force as frequency increases.
 
-![Graph of Force-Frequency Relationship curve](images/force_frequency_curve.png)
 
 ## 6. Running an Analysis
 1.  Open the appropriate Python script in Spyder.
