@@ -2,12 +2,14 @@
 Welcome to the Engineered Muscle Contractility Analysis Pipeline! (EMCAP) This suite of Python scripts is designed to batch process and analyze electrical stimulation data from engineered human muscle tissues from a time force 24 well data format. The core strength of this pipeline lies in its custom, in-house peak finding algorithms.
 
 ````markdown
-# Muscle Kinetics Pipeline: Automated Analysis for 24-Well Engineered Tissues
+# EMCAP: Engineered Muscle Contractility Analysis Pipeline
 
 **Version:** 1.0  
 **License:** MIT License  
 
-> **Need the full manual?** > [📄 **Click here to view or download the complete User Guide (PDF)**](docs/README%20USER%20GUIDE.pdf)
+> **Need the full manual?**
+>
+> [📄 **Click here to view or download the complete User Guide (PDF)**](docs/README_USER_GUIDE.pdf)
 
 ---
 
