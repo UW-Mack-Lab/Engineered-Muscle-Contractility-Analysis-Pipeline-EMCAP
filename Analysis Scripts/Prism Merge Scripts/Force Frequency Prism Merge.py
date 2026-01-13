@@ -1,15 +1,8 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Mon Jun  9 09:23:42 2025
-
-@author: pb92
-"""
 
 # -*- coding: utf-8 -*-
 """
 Created on Fri Jun 06 23:30:00 2025
 
-@author: Gemini AI Assistant
 
 @version: 17.3.0
 
@@ -200,4 +193,5 @@ def main():
         create_prism_file(summary_df, output_path)
 
 if __name__ == "__main__":
+
     main()
