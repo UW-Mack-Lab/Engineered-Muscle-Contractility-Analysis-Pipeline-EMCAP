@@ -1,9 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Fri Nov 21 11:25:18 2025
-
-@author: phili
-"""
 
 # -*- coding: utf-8 -*-
 """
@@ -253,4 +247,5 @@ def main():
         print("\nNo data was loaded from the selected files. Nothing to save.")
 
 if __name__ == "__main__":
+
     main()
