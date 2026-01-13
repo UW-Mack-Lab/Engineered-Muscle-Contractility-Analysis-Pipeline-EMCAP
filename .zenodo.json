@@ -1,0 +1,11 @@
+{
+  "title": "Engineered Muscle Contractility Analysis Pipeline (EMCAP)",
+  "creators": [
+    {
+      "name": "Barrett, Philip",
+      "affiliation": "University of Washington"
+    }
+  ],
+  "description": "A Python-based analysis pipeline for processing force-time waveforms from 24-well engineered muscle tissues.",
+  "license": "MIT"
+}
