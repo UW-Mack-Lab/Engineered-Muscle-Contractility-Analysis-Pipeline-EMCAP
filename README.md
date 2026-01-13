@@ -14,7 +14,7 @@ Welcome to the Engineered Muscle Contractility Analysis Pipeline! (EMCAP) This s
 ---
 
 ## Citation
-If you use this pipeline in your research, please cite the software as follows: TBA
+[![DOI](https://zenodo.org/badge/1108634483.svg)](https://doi.org/10.5281/zenodo.18228700)
 ---
 
 ## Table of Contents
