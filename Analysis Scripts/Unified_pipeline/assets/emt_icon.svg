@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- EMT Pipeline app icon: a 24-well plate, a force trace (two twitches then a
+       tetanus) and the stimulation bolt. Re-render with assets/make_app.sh. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2a1f6b"/>
+      <stop offset="0.55" stop-color="#16407a"/>
+      <stop offset="1" stop-color="#0b7a83"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.18"/>
+      <stop offset="0.45" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="trace" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ffd166"/>
+      <stop offset="0.45" stop-color="#ff8a3d"/>
+      <stop offset="1" stop-color="#ff3d8b"/>
+    </linearGradient>
+    <linearGradient id="bolt" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff59d"/>
+      <stop offset="1" stop-color="#ffc400"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="14" stdDeviation="16" flood-color="#000000" flood-opacity="0.35"/>
+    </filter>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="18"/>
+    </filter>
+    <clipPath id="tile">
+      <rect x="100" y="100" width="824" height="824" rx="185"/>
+    </clipPath>
+  </defs>
+
+  <!-- tile -->
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)" filter="url(#shadow)"/>
+  <g clip-path="url(#tile)">
+    <rect x="100" y="100" width="824" height="824" fill="url(#sheen)"/>
+
+    <!-- 24-well plate: 4 rows x 6 columns -->
+    <g fill="#ffffff" fill-opacity="0.07" stroke="#ffffff" stroke-opacity="0.22" stroke-width="5">
+      <circle cx="205" cy="345" r="40"/><circle cx="328" cy="345" r="40"/><circle cx="451" cy="345" r="40"/>
+      <circle cx="574" cy="345" r="40"/><circle cx="697" cy="345" r="40"/><circle cx="820" cy="345" r="40"/>
+      <circle cx="205" cy="483" r="40"/><circle cx="328" cy="483" r="40"/><circle cx="451" cy="483" r="40"/>
+      <circle cx="574" cy="483" r="40"/><circle cx="697" cy="483" r="40"/><circle cx="820" cy="483" r="40"/>
+      <circle cx="205" cy="621" r="40"/><circle cx="328" cy="621" r="40"/><circle cx="451" cy="621" r="40"/>
+      <circle cx="574" cy="621" r="40"/><circle cx="697" cy="621" r="40"/><circle cx="820" cy="621" r="40"/>
+      <circle cx="205" cy="759" r="40"/><circle cx="328" cy="759" r="40"/><circle cx="451" cy="759" r="40"/>
+      <circle cx="574" cy="759" r="40"/><circle cx="697" cy="759" r="40"/><circle cx="820" cy="759" r="40"/>
+    </g>
+  </g>
+
+  <!-- force trace: glow underlay, then the line -->
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path id="t" d="M168 770 L222 770 C244 770 249 600 266 600 C283 600 288 770 312 770
+                    L338 770 C356 770 361 575 378 575 C395 575 400 770 424 770
+                    L446 770 C462 770 464 392 498 386 Q528 378 556 392 T612 392 T668 392 T716 394
+                    C748 396 756 770 812 770 L858 770"
+          stroke="url(#trace)" stroke-width="44" stroke-opacity="0.75" filter="url(#glow)"/>
+    <path d="M168 770 L222 770 C244 770 249 600 266 600 C283 600 288 770 312 770
+             L338 770 C356 770 361 575 378 575 C395 575 400 770 424 770
+             L446 770 C462 770 464 392 498 386 Q528 378 556 392 T612 392 T668 392 T716 394
+             C748 396 756 770 812 770 L858 770"
+          stroke="url(#trace)" stroke-width="30"/>
+  </g>
+
+  <!-- stimulation bolt -->
+  <path d="M812 150 L712 318 L780 318 L734 452 L872 262 L800 262 L850 150 Z"
+        fill="url(#bolt)" stroke="#e08e00" stroke-width="10" stroke-linejoin="round"
+        filter="url(#shadow)"/>
+
+  <!-- sparkles -->
+  <g fill="#ffffff">
+    <path d="M664 196 Q668 222 690 226 Q668 230 664 256 Q660 230 638 226 Q660 222 664 196 Z" opacity="0.9"/>
+    <path d="M884 420 Q886 436 900 438 Q886 440 884 456 Q882 440 868 438 Q882 436 884 420 Z" opacity="0.75"/>
+  </g>
+</svg>

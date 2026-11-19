@@ -1,0 +1,338 @@
+---
+title: "EMT Report"
+params:
+  config: "configs/mydataset.yml"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    embed-resources: true
+    fig-dpi: 96
+    page-layout: full
+execute:
+  echo: false
+  message: false
+  warning: false
+---
+
+```{r setup}
+#| include: false
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(ggprism)
+  library(knitr)
+})
+for (f in list.files("R", pattern = "\\.R$", full.names = TRUE)) source(f)
+
+cfg <- load_emt_config(params$config)
+out_dir    <- cfg$output_dir
+panel_dir  <- file.path(out_dir, "panels")
+sweep_dir  <- file.path(out_dir, "all-metrics")
+stats_dir  <- file.path(out_dir, "stats")
+sz <- cfg$panel_sizes
+no_legend <- theme(legend.position = "none")
+
+# Collect import warnings so they show up in the report instead of the console
+import_warnings <- character()
+collect <- function(expr) withCallingHandlers(expr, warning = function(w) {
+  import_warnings <<- c(import_warnings, conditionMessage(w))
+  invokeRestart("muffleWarning")
+})
+
+batch_sheet <- read_batch_sheet(cfg$batch_csv)
+excluded    <- attr(batch_sheet, "excluded")
+metric_batches <- resolve_batches(cfg$metric_batches, batch_sheet$batch)
+trace_batches  <- resolve_batches(cfg$trace_batches,  batch_sheet$batch)
+has <- function(a) any(batch_sheet$analysis == a)
+
+traces75 <- if (has("75hz")) collect(import_traces(cfg$batch_csv, "75hz", cfg$conditions, trace_batches))
+m75      <- if (has("75hz")) collect(import_metrics(cfg$batch_csv, "75hz", cfg$conditions, metric_batches))
+mff      <- if (has("ff")) collect(import_metrics(cfg$batch_csv, "ff", cfg$conditions, metric_batches))
+fat_tr   <- if (has("fatigue")) collect(import_traces(cfg$batch_csv, "fatigue", cfg$conditions, trace_batches))
+mfat     <- if (has("fatigue")) collect(import_metrics(cfg$batch_csv, "fatigue", cfg$conditions, metric_batches))
+
+import_warnings <- unique(import_warnings)
+
+sp_args <- list(colors = cfg$colors, days_max = cfg$days_max,
+                batches = metric_batches, labels = cfg$labels, seed = cfg$seed)
+```
+
+**Dataset:** `r cfg$name` · **Config:** `r params$config` · **Rendered:** `r format(Sys.time(), "%Y-%m-%d %H:%M")`
+
+## Data summary
+
+```{r summary-table}
+tibble(
+  Setting = c("Batch CSV", "Days shown", "Metric batches (panels C+, sweep, stats)",
+              "Trace batches (panels A/B, fatigue curves)", "Conditions (first = stats reference)",
+              "Statistics unit", "Output folder"),
+  Value = c(cfg$batch_csv,
+            if (is.finite(cfg$days_max)) paste("≤", cfg$days_max) else "all",
+            paste(metric_batches, collapse = ", "),
+            paste(trace_batches, collapse = ", "),
+            paste(names(cfg$conditions), collapse = ", "),
+            paste0(cfg$stats$unit, if (isTRUE(cfg$stats$paired)) " (paired)" else "",
+                   ", p adjusted: ", cfg$stats$p_adjust, " within metric"),
+            normalizePath(out_dir, mustWork = FALSE))
+) |> kable()
+```
+
+```{r batches-not-used}
+#| results: asis
+not_used <- setdiff(unique(batch_sheet$batch), metric_batches)
+if (length(not_used)) {
+  cat("::: {.callout-note}\nBatch(es) **", paste(not_used, collapse = ", "),
+      "** are not excluded in the batch CSV but are not in `metric_batches`, so they are left out of the metric panels and statistics.\n:::\n", sep = "")
+}
+if (nrow(excluded)) {
+  cat("\n**Excluded in the batch CSV:**\n\n")
+  print(kable(excluded |> select(batch, analysis, directory)))
+}
+qc <- bind_rows(qc_nonpositive_force(m75, "75hz"),
+                qc_nonpositive_force(mff, "ff"),
+                qc_nonpositive_force(mfat, "fatigue"))
+if (nrow(qc)) {
+  cat("\n::: {.callout-warning}\n## QC: wells with zero or negative active force\n\n",
+      "Usually means peak detection failed upstream for that file. Normalized metrics for these wells (e.g. FF Normalized) are not meaningful. They are **not** removed automatically; re-run the analysis or exclude the batch.\n\n", sep = "")
+  print(kable(qc))
+  cat("\n:::\n")
+}
+if (length(import_warnings)) {
+  cat("\n::: {.callout-warning}\n## Import warnings\n\n",
+      paste0("- ", import_warnings, collapse = "\n"), "\n:::\n", sep = "")
+}
+```
+
+### Wells per condition (75 Hz)
+
+```{r well-counts}
+if (!is.null(m75)) {
+  m75 |> filter(day <= cfg$days_max) |> well_counts() |> kable()
+}
+```
+
+## Figure panels
+
+PNGs (no legends, sized for figure assembly) are saved to ``r panel_dir``.
+
+```{r kinetics-prep}
+kin <- if (!is.null(traces75)) prep_kinetics_traces(
+  traces75, cfg$kinetics$stim_time_s, cfg$kinetics$window_s,
+  cfg$kinetics$baseline_s, cfg$days_max)
+```
+
+### A. Normalized force (75 Hz, stim at `r cfg$kinetics$stim_time_s` s)
+
+```{r panel-a}
+#| fig-width: !expr cfg$panel_sizes$traces[1]
+#| fig-height: !expr cfg$panel_sizes$traces[2] + 0.6
+if (!is.null(kin)) {
+  p <- kinetics_trace_plot(kin, "normalized", cfg$colors, cfg$kinetics$window_s)
+  save_panel(p + no_legend, "A_normalized_force", sz$traces, panel_dir)
+  p + theme(legend.position = "bottom")
+}
+```
+
+### B. Active force
+
+```{r panel-b}
+#| fig-width: !expr cfg$panel_sizes$traces[1]
+#| fig-height: !expr cfg$panel_sizes$traces[2] + 0.6
+if (!is.null(kin)) {
+  p <- kinetics_trace_plot(kin, "active", cfg$colors, cfg$kinetics$window_s)
+  save_panel(p + no_legend, "B_active_force", sz$traces, panel_dir)
+  p + theme(legend.position = "bottom")
+}
+```
+
+### `r paste(LETTERS[2 + seq_along(cfg$kinetics_metrics)], collapse = "–")`. Kinetics metrics
+
+```{r panels-kinetics-metrics}
+#| layout-ncol: 2
+#| fig-width: !expr cfg$panel_sizes$metric[1] + 1.5
+#| fig-height: !expr cfg$panel_sizes$metric[2]
+if (!is.null(m75)) {
+  km <- cfg$kinetics_metrics
+  for (i in seq_along(km)) {
+    p <- do.call(metric_superplot, c(list(m75, names(km)[i], y_label = km[[i]]), sp_args))
+    save_panel(p + no_legend, paste0(LETTERS[2 + i], "_", names(km)[i]), sz$metric, panel_dir)
+    print(p + ggtitle(names(km)[i]))
+  }
+}
+next_letter <- LETTERS[3 + length(cfg$kinetics_metrics)]
+```
+
+### `r next_letter`. Force-frequency: `r cfg$ff_metric$name`
+
+```{r panel-ff}
+#| fig-width: !expr cfg$panel_sizes$ff[1]
+#| fig-height: !expr cfg$panel_sizes$ff[2] + 0.8
+if (!is.null(mff)) {
+  p <- do.call(ff_superplot, c(list(mff, cfg$ff_metric$name, y_label = cfg$ff_metric$label), sp_args))
+  save_panel(p + no_legend, paste0(next_letter, "_FF_", cfg$ff_metric$name), sz$ff, panel_dir)
+  p + theme(legend.position = "bottom")
+}
+```
+
+## Fatigue
+
+```{r fatigue-curves}
+#| fig-width: !expr cfg$panel_sizes$fatigue[1]
+#| fig-height: !expr cfg$panel_sizes$fatigue[2] + 0.6
+if (!is.null(fat_tr)) {
+  p <- fatigue_curve_plot(fat_tr, cfg$colors, cfg$days_max, trace_batches)
+  save_panel(p + no_legend, "fatigue_curves", sz$fatigue, panel_dir)
+  p + theme(legend.position = "bottom") +
+    ggtitle(paste0("Condition-average fatigue, batch ", paste(trace_batches, collapse = ", ")))
+}
+```
+
+```{r fatigue-metrics}
+#| layout-ncol: 2
+#| fig-width: !expr cfg$panel_sizes$metric[1] + 1.5
+#| fig-height: !expr cfg$panel_sizes$metric[2]
+if (!is.null(mfat)) {
+  fm <- cfg$fatigue_metrics
+  for (i in seq_along(fm)) {
+    p <- do.call(metric_superplot, c(list(mfat, names(fm)[i], y_label = fm[[i]]), sp_args))
+    save_panel(p + no_legend, paste0("fatigue_", names(fm)[i]), sz$metric, panel_dir)
+    print(p + ggtitle(names(fm)[i]))
+  }
+}
+```
+
+## Statistics
+
+```{r stats}
+st <- cfg$stats
+run_stats <- function(m, by) {
+  if (is.null(m)) return(NULL)
+  m |>
+    filter(day <= cfg$days_max) |>
+    compare_conditions(by = by, unit = st$unit, paired = isTRUE(st$paired),
+                       p_adjust = st$p_adjust)
+}
+stats <- list(
+  `75hz`  = run_stats(m75, "day"),
+  ff      = run_stats(mff, c("day", "Hz")),
+  fatigue = run_stats(mfat, "day")
+) |> compact()
+
+dir.create(stats_dir, recursive = TRUE, showWarnings = FALSE)
+iwalk(stats, \(s, nm) write_csv(s, file.path(stats_dir, paste0("stats_", nm, ".csv"))))
+
+fmt_stats <- function(s) {
+  s |> mutate(across(c(mean_ref, mean_cmp, difference), \(x) signif(x, 3)),
+              across(c(p_value, p_adj), \(x) signif(x, 2)))
+}
+```
+
+Each condition is compared with **`r names(cfg$conditions)[1]`** by `r if (isTRUE(cfg$stats$paired)) "paired" else "Welch"` t-test, separately for each day`r if (!is.null(mff)) " (and each frequency for force-frequency)"`. With `unit: batch`, wells are averaged within each batch first, so *n* is the number of batches. With `unit: well`, wells are treated as independent, which overstates significance. p-values are adjusted (`r cfg$stats$p_adjust`) within each metric. Full tables are saved as CSVs in ``r stats_dir``.
+
+### Panel metrics
+
+```{r stats-panel}
+panel_rows <- list(
+  if (!is.null(stats$`75hz`)) filter(stats$`75hz`, metric %in% names(cfg$kinetics_metrics)),
+  if (!is.null(stats$ff)) filter(stats$ff, metric == cfg$ff_metric$name) |>
+    group_by(metric, comparison, day) |> slice_min(p_adj, n = 1, with_ties = FALSE) |> ungroup() |>
+    mutate(metric = paste0(metric, " (lowest-p Hz: ", Hz, ")")) |> select(-Hz),
+  if (!is.null(stats$fatigue)) filter(stats$fatigue, metric %in% names(cfg$fatigue_metrics))
+) |> compact() |> bind_rows()
+if (nrow(panel_rows)) {
+  panel_rows |> fmt_stats() |>
+    select(metric, day, comparison, n_ref, n_cmp, mean_ref, mean_cmp, difference, p_value, p_adj, note) |>
+    kable()
+}
+```
+
+### All metrics
+
+::: {.panel-tabset}
+
+```{r stats-dt-fn}
+stats_dt <- function(s) {
+  if (is.null(s)) return(invisible(NULL))
+  DT::datatable(fmt_stats(s), filter = "top", rownames = FALSE,
+                options = list(pageLength = 15, scrollX = TRUE))
+}
+```
+
+#### 75 Hz kinetics
+
+```{r stats-75}
+stats_dt(stats$`75hz`)
+```
+
+#### Force-frequency
+
+```{r stats-ff}
+stats_dt(stats$ff)
+```
+
+#### Fatigue
+
+```{r stats-fatigue}
+stats_dt(stats$fatigue)
+```
+
+:::
+
+## All-metrics sweep
+
+```{r sweep-setup}
+#| results: asis
+do_sweep <- isTRUE(cfg$sweep)
+if (do_sweep) {
+  cat("Every metric in every analysis, for days ≤ ", cfg$days_max, " and batches ",
+      paste(metric_batches, collapse = ", "), ". PNGs are saved to `", sweep_dir, "`.\n", sep = "")
+} else {
+  cat("Sweep disabled in config (`sweep: false`).\n")
+}
+```
+
+::: {.panel-tabset}
+
+```{r sweep-75hz}
+#| results: asis
+#| fig-width: 7
+#| fig-height: 4.5
+if (do_sweep && !is.null(m75)) {
+  cat("\n\n#### 75 Hz kinetics\n\n")
+  for (m in unique(m75$metric)) {
+    p <- do.call(metric_superplot, c(list(m75, m), sp_args)) + ggtitle(m)
+    save_panel(p, paste0("75hz_", m), sz$sweep, sweep_dir, dpi = 150)
+    print(p); cat("\n\n")
+  }
+}
+```
+
+```{r sweep-ff}
+#| results: asis
+#| fig-width: !expr cfg$panel_sizes$ff[1]
+#| fig-height: !expr cfg$panel_sizes$ff[2] + 1
+if (do_sweep && !is.null(mff)) {
+  cat("\n\n#### Force-frequency\n\n")
+  for (m in unique(mff$metric)) {
+    p <- do.call(ff_superplot, c(list(mff, m), sp_args)) + ggtitle(m)
+    save_panel(p, paste0("ff_", m), sz$ff, sweep_dir, dpi = 150)
+    print(p); cat("\n\n")
+  }
+}
+```
+
+```{r sweep-fatigue}
+#| results: asis
+#| fig-width: 7
+#| fig-height: 4.5
+if (do_sweep && !is.null(mfat)) {
+  cat("\n\n#### Fatigue\n\n")
+  for (m in unique(mfat$metric)) {
+    p <- do.call(metric_superplot, c(list(mfat, m), sp_args)) + ggtitle(m)
+    save_panel(p, paste0("fatigue_", m), sz$sweep, sweep_dir, dpi = 150)
+    print(p); cat("\n\n")
+  }
+}
+```
+
+:::

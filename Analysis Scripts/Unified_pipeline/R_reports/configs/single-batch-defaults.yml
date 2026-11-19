@@ -1,0 +1,34 @@
+# Panel settings for single-batch EMT reports made by render-pipeline.R
+# (the Master Analysis Launcher's "Single-batch EMT report" option).
+# name, batch_csv, output_dir, batches and stats are filled in per run.
+# conditions are taken from the plate map unless you add them here.
+# Not a dataset config: the launcher hides it from its dataset list.
+
+kinetics:
+  stim_time_s: 48
+  window_s: 3
+  baseline_s: 0.01
+
+kinetics_metrics:
+  "Max tetanic-BK (μN)": "Active Force (μN)"
+  "TT50P Time": "Time to 50% Peak (s)"
+  "R50 Time": "Time to 50% Relax (s)"
+  "TTP90 Time": "Time to 90% Peak (s)"
+
+ff_metric:
+  name: "FF Normalized (%)"
+  label: "Percent of 100Hz Tension (%)"
+
+fatigue_metrics:
+  "Fatigue Resistance Index (%)": "Fatigue Resistance Index (%)"
+  "Last Normalized Force (% of T1)": "Final Force (% of first)"
+
+sweep: true
+seed: 1
+
+panel_sizes:
+  traces:  [10, 2.5]
+  metric:  [4, 4]
+  ff:      [14, 3.5]
+  fatigue: [10, 2.5]
+  sweep:   [8, 6]

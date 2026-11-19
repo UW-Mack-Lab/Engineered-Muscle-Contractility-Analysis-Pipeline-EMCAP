@@ -1,0 +1,41 @@
+# Plate-trace report config: R672C batch 3
+# Only timeforce_dir and plate_map are required. For a quick look you can skip
+# the config entirely: Rscript render-plates.R "/path/to/batch-folder"
+
+name: R672C Batch 3
+timeforce_dir: /Users/cmandrycky/Library/CloudStorage/OneDrive-UW/Regnier_Mack Labs/Projects/iPS-SkM-cells-and-tissues/empirical/data/2026-11-05_R672C-EMT-Batch3/timeforce
+plate_map: /Users/cmandrycky/Library/CloudStorage/OneDrive-UW/Regnier_Mack Labs/Projects/iPS-SkM-cells-and-tissues/empirical/data/2026-11-05_R672C-EMT-Batch3/R672C Plate Map.csv
+output_dir: output/plates/r672c-batch3
+
+days: all              # or e.g. [3, 7]
+
+# Optional: plate-map label -> display label, and colors (same format as the
+# EMT report configs). Without these, plate-map labels are used as-is.
+conditions:
+  WT:       [UC2WT]
+  R672CHet: [HetR672C]
+  R672CHom: [HomR672C]
+colors:
+  WT:       "#000000"
+  R672CHet: "#009E73"
+  R672CHom: "#E69F00"
+
+# How each protocol is plotted. These are the built-in defaults; list a
+# protocol here only to change it. Protocols not listed anywhere (e.g.
+# ASFatigue, Priming) are plotted as the whole recording.
+#   snapshot: one contraction, from time_s - pre_s to time_s + post_s
+#   full:     0 to end_s; anything after end_s (recording left running) is dropped
+protocols:
+  02Hz:    {type: full, end_s: 55}
+  1Hz:     {type: full, end_s: 35}
+  75Hz:    {type: snapshot, time_s: 48, pre_s: 0.2, post_s: 3}
+  Fatigue: {type: full, end_s: 60}
+  FF:      {type: full, end_s: 250}
+
+plot_size: [14, 8]     # inches, per plate plot
+png_dpi: 200
+
+# One GIF per protocol stepping through the days, x/y limits fixed across days
+animation: true
+animation_delay_s: 1   # seconds per day
+animation_dpi: 100     # frame resolution (14 x 8 in at 100 dpi = 1400 x 800 px)
