@@ -220,7 +220,21 @@ list_timeforce_files <- function(dir, days = "all", known = names(plate_protocol
   out <- out |> slice(1) |> ungroup() |> arrange(day, protocol)
   attr(out, "skipped") <- skipped
   attr(out, "duplicates") <- dups
+  attr(out, "misfiled") <- find_misfiled(out, known)
   out
+}
+
+#' Files sitting in a folder named after a *different* protocol, e.g. a 75Hz
+#' recording in FF/. They're still plotted under the protocol in their file name
+#' (as the launcher analyzes them); this only flags them. A folder counts as a
+#' protocol folder if its name is a configured protocol or any protocol found.
+find_misfiled <- function(files, known = character()) {
+  norm <- function(v) tolower(gsub("[-_ ]", "", v))
+  folder <- basename(dirname(files$file))
+  protocol_names <- norm(unique(c(known, files$protocol, "ASFatigue", "Priming")))
+  files |>
+    mutate(folder = folder) |>
+    filter(norm(folder) %in% protocol_names, norm(folder) != norm(protocol))
 }
 
 #' Group spellings of the same protocol, ignoring case, "-", "_" and spaces:
@@ -262,18 +276,28 @@ read_timeforce <- function(file, t_from = -Inf, t_to = Inf) {
 
 #' Keep each bin's min and max so peaks and the noise envelope survive while a
 #' 250 s trace drops from ~25,000 to `max_points` points per well.
+#' Bins are n_bins equal time spans per well (cut()); in each bin the first
+#' minimum and first maximum row are kept; rows come back sorted by well, bin,
+#' time. Done with integer sort keys rather than one dplyr group per bin, which
+#' was ~20x slower.
 decimate_minmax <- function(d, max_points) {
   n <- max(table(d$well))
   if (!max_points || n <= max_points) return(d)
   n_bins <- max_points %/% 2
-  d |>
-    group_by(well) |>
-    mutate(bin = cut(time, n_bins, labels = FALSE)) |>
-    group_by(well, bin) |>
-    slice(unique(c(which.min(force), which.max(force)))) |>
-    arrange(time, .by_group = TRUE) |>
-    ungroup() |>
-    select(-bin)
+  w <- match(d$well, sort(unique(d$well), method = "radix"))
+  bin <- integer(nrow(d))
+  for (idx in split(seq_len(nrow(d)), w)) bin[idx] <- cut(d$time[idx], n_bins, labels = FALSE)
+  key <- w * (n_bins + 1L) + bin
+  ok <- !is.na(d$force)
+  # radix order is stable, so ties keep row order and the first min/max wins
+  first_of <- function(o) {
+    o <- o[ok[o]]
+    o[!duplicated(key[o])]
+  }
+  keep <- unique(c(first_of(order(key, d$force, method = "radix")),
+                   first_of(order(key, -d$force, method = "radix"))))
+  out <- d[keep, ]
+  out[order(w[keep], bin[keep], out$time, method = "radix"), ]
 }
 
 #' Read one file for plotting according to its protocol settings.

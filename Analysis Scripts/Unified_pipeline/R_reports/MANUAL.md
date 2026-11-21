@@ -6,7 +6,7 @@ This folder has two tools:
 |---|---|---|---|
 | **EMT report** (§1–9) | PB-analyzed Excel workbooks across batches | Figures, metric superplots and statistics comparing conditions | `render-report.R` |
 | **Plate trace report** (§10) | Raw time-force CSVs from one 24-well plate | Looking at every well's raw trace in plate layout: QC before analysis | `render-plates.R` |
-| **Both, from the launcher** (§11) | A raw data folder + plate map | One click: Python analysis, then both reports | `Master_Analysis_Launcher.py` → `render-pipeline.R` |
+| **Both, from the launcher** (§11) | A raw data folder + plate map | Per batch: Python analysis, then both reports. Per dataset: the combined reports | `Master_Analysis_Launcher.py` → `render-pipeline.R` |
 
 The EMT report turns PB-analyzed EMT Excel workbooks into a single self-contained HTML
 report, plus figure-ready PNG panels and statistics CSVs. Everything that is
@@ -17,6 +17,14 @@ never needs editing for a new dataset.
 ---
 
 ## 1. Quick start (new dataset, 5 steps)
+
+**With the launcher (easiest):** pick the first batch's data folder and plate map,
+click **New…** next to *Register in dataset*, name the dataset, and run the batch with
+*Register* ticked. Repeat for each batch (same dataset, next batch #), then click
+**Run dataset reports**. The launcher writes the config and the batch CSV for you
+(§11); check the config's `conditions` and `colors` (§4.1) before trusting the report.
+
+**By hand:**
 
 1. **Make a batch CSV** listing every data folder (§3).
 2. **Copy the example config:** `cp configs/examples/dataset-example.yml configs/mydataset.yml`
@@ -48,9 +56,11 @@ never needs editing for a new dataset.
 | `R/emt-data.R` | `load_emt_data()` and plot shortcuts for interactive use. |
 | `render-plates.R` | Entry point for the plate trace report (§10). |
 | `plate-report.qmd` | Plate trace report template. |
+| `plate-combined-report.qmd` | Template for several batches in one plate trace report (§10.7). |
 | `configs/plates/*.yml` | Optional plate trace configs (§10.3). Git-ignored. |
 | `R/plate-data.R` | Plate map, time-force file discovery and reading. |
 | `R/plate-plots.R` | The plate-layout grid plot. |
+| `R/plate-combined.R` | Config and file discovery for the combined plate report. |
 | `../sample_data/` | One example batch (plate map, plus `timeforce/` recordings if you copied them in). |
 | `renv.lock`, `renv/`, `.Rprofile` | Pinned R packages (renv). `.Rprofile` activates the project library whenever R starts in this folder. |
 | `EMT-Reports.Rproj` | RStudio project. Open it so the working directory and package library are right. |
@@ -121,14 +131,19 @@ the render with a message naming the batch, file and what's missing.
 
 ### 3.2 The batch CSV
 
-One row per batch × analysis. Columns:
+One row per batch × analysis. The launcher's *Register in dataset* option writes
+these rows for you (§11). Columns:
 
 | Column | Required | Meaning |
 |---|---|---|
 | `batch` | yes | Batch (differentiation) number. Any integers; gaps are fine. |
-| `analysis` | yes | `ff`, `75hz` or `fatigue` (case-insensitive). |
-| `directory` | yes | Full path to the folder of workbooks. |
+| `analysis` | yes | `ff`, `75hz` or `fatigue` (case-insensitive) for the EMT report; `timeforce` for the combined plate report (§10.7). |
+| `directory` | yes | Full path to the folder of workbooks; for `timeforce`, the batch's raw time-force folder. |
 | `exclude` | no | `1` = skip this row; `0` or blank = use it. |
+| `plate` | no | Only when one batch was run on several plates: which plate the row is (e.g. `A`, `B`). The batch's plates are pooled as one batch for batch means and stats; wells and condition-average traces stay separate per plate. Blank = the batch's only plate. |
+| `plate_map` | no | `timeforce` rows only: the batch's plate map CSV. Blank = found next to or above the time-force folder, as in §10.2. |
+
+The EMT report ignores `timeforce` rows, and the combined plate report uses only them.
 
 Example:
 
@@ -164,8 +179,11 @@ Tips:
 
 ## 4. The config file
 
-Start from `configs/examples/dataset-example.yml` (copy it to `configs/`). Paths are
-relative to the `R_reports/` folder.
+Start from `configs/examples/dataset-example.yml`, or let the launcher's *New…* write
+one. Keep the config with the data, e.g. in the experiment folder: relative paths in it
+(`batch_csv`, `output_dir`) are relative to the config's own folder. Configs in
+`R_reports/configs/` are the exception: their paths are relative to `R_reports/`, as
+before. Absolute paths work anywhere.
 
 ### 4.1 Settings you must set
 
@@ -668,43 +686,188 @@ plate_grid_plot(trs[[1]], pm, plate_colors(pm$group), limits = lim)
 raw <- read_timeforce(files$file[1], t_from = 40, t_to = 60)
 ```
 
+### 10.7 Several batches in one report
+
+For a dataset, you don't need to write a config: the launcher's *Combined plate trace
+report* (§11), or `Rscript render-pipeline.R --dataset-config configs/<dataset>.yml
+--dataset-plates`, builds one from the dataset config and the `timeforce` rows of its
+batch CSV (§3.2). Batches are named `Batch <n>`, the dataset's `conditions` and
+`colors` are used, and the report goes to `<output_dir>/plates/`. The generated config
+is kept as `<output_dir>/_configs/plates.yml`. To change plate settings for a dataset,
+add a `plates:` block to the dataset config; any key from §10.3 works there:
+
+```yaml
+plates:
+  days: [3, 4, 5, 6, 7]
+  png_dpi: 120
+  protocols:
+    Fatigue: {end_s: 45}
+```
+
+For any other set of batches, write the config yourself. A plate config with a
+`batches:` list renders one combined report. Every protocol gets one tab per batch,
+and each batch one tab per day. Copy `configs/examples/plate-combined-example.yml` to
+`configs/plates/` and edit it:
+
+```yaml
+name: R672C all EMT
+output_dir: output/r672c-all-emt/plates
+batches:
+  - name: Batch 1
+    timeforce_dir: /…/Batch-1/timeforce
+    plate_map: /…/Batch-1/R672C Plate Map.csv
+  - name: Batch 2
+    timeforce_dir: /…/Batch-2/timeforce
+    plate_map: /…/Batch-2/R672C Plate Map.csv
+    days: [3, 4, 5, 6, 7]          # any setting can be overridden per batch
+  - /…/2026-11-05_R672C-EMT-Batch3 # or just a batch folder (named as in §10.2)
+conditions:                        # shared by every batch
+  WT: [UC2WT, WT]                  # list every spelling used across batches
+colors:
+  WT: "#000000"
+```
+
+Run it with `Rscript render-plates.R configs/plates/<name>.yml`, the same as a
+single-plate config. The differences from the single-plate report:
+
+- Each batch keeps its own plate map, so the plate-map tables and panel titles are
+  per batch. Conditions and colors are shared, so a condition has the same color in
+  every batch.
+- Protocol spellings are merged across batches, e.g. Batch 1 `ASfatigue` and Batch 2
+  `ASFatigue` become one section.
+- The **All days ▶** animations use x and y limits fixed across every day **of every
+  batch** for that protocol, so you can compare batches by flipping between their tabs.
+  Per-day plots still use that day's own limits.
+- PNGs are saved as `plate-traces/<protocol>/<batch>_d<day>_<protocol>.png`, and the
+  animations as `animations/<batch>_<protocol>_all-days.gif`.
+- Every batch's PNGs are embedded, so the HTML gets large. Lower `png_dpi` (for
+  example to 150, the default for dataset reports) to keep it manageable.
+- Files in a folder named after a different protocol (e.g. a 75Hz file in `FF/`) are
+  plotted under the protocol in their file name and listed in a warning under *Files
+  found*. The single-plate report does the same.
+
 ---
+
+### 10.8 Speed: worker processes
+
+Reading the time-force files and drawing the plots (each day's PNG and each
+animation) run in separate R worker processes, then the report text is written in
+order. The number of workers is `EMT_R_WORKERS` (the launcher sets it to its
+*Total worker budget*), otherwise one less than the physical cores; at most 8,
+since each worker loads its own copy of R and the plotting packages.
+`EMT_R_WORKERS=1` runs everything in the report's own R session.
+
+On R672C batch 3 (25 files) the plate report went from 42 s to 14 s; the combined
+report of all three R672C batches from 269 s to 70 s. Most of the remaining time
+is ggplot2 laying out each 24-panel figure (~0.5 s each, regardless of dpi) and
+Quarto embedding the images into the HTML.
 
 ## 11. Running everything from the Master Analysis Launcher
 
-`Python_analyze/Master_Analysis_Launcher.py` runs the Python analyses and then
-these reports in one go. In its **Reports (R)** section:
+`Python_analyze/Master_Analysis_Launcher.py` has two sections, each with its own Run
+button. They share the Rscript setting, *Open reports folder when done*, and the run
+log, and only one runs at a time.
+
+### 11.1 Batch section (once per batch)
+
+Pick the batch's data folder and plate map, tick the analyses and reports, and click
+**Run batch**. The Python analyses run first, then the batch's reports:
 
 | Option | What it does | Output |
 |---|---|---|
 | Plate trace report | §10 report on the raw files in the data folder, using the plate map you picked | `<batch>/reports/plates/` |
-| Single-batch EMT report | EMT report on this batch's `analyzed/75Hz`, `FF` and `Fatigue` workbooks only | `<batch>/reports/emt/` |
-| Add to dataset report | Adds/updates this batch's rows (as batch #N) in the chosen config's batch CSV, then re-renders that dataset's report | the config's `output_dir` |
+| Single-batch EMT report | EMT report on this batch's `analyzed/75Hz`, `FF` and `Fatigue` workbooks only, every recorded day | `<batch>/reports/emt/` |
+| Register in dataset … as batch #N | Adds/updates this batch's rows in the chosen dataset's batch CSV: its analyzed folders plus a `timeforce` row (raw folder + plate map). Renders nothing. | the dataset's batch CSV |
 
 `<batch>` is the folder above the data folder, next to `analyzed/`. Reports
 render even when no files were new, so you can re-run just the reports after
 changing a config. Twitch results aren't used by any report.
 
-- **Single-batch settings:** panels come from `configs/single-batch-defaults.yml`,
-  or from the dataset config when "Add to dataset report" is ticked. Conditions come
-  from that dataset config, or otherwise straight from the plate-map labels, with the
-  first label in plate order as the reference. Stats use `unit: well`, because one
-  batch can't give batch-level p-values. Treat them as exploratory.
-- **Dataset batch CSV:** existing rows for that batch × analysis keep their
-  `exclude` value and any extra columns. Only `directory` is updated. Before any
-  change, the CSV is copied to `<csv>.bak-<timestamp>`.
+- **Finding files:** the data folder is searched including subfolders. The protocol
+  comes from the file name (§10.2 rules, the same as the plate report), not the
+  folder. A file in a folder named after another protocol is analyzed by its name and
+  reported as a warning. If a day × protocol has several files, the newest is used.
+- **Single-batch settings:** panels come from `configs/single-batch-defaults.yml`, or
+  from the dataset config when *Register in dataset* is ticked (its `days_max` is
+  ignored, so the batch report shows every day). Conditions come from that dataset
+  config, or otherwise straight from the plate-map labels, with the first label in
+  plate order as the reference. Stats use `unit: well`, because one batch can't give
+  batch-level p-values. Treat them as exploratory.
+- **Batch number:** suggested when you pick the data folder or dataset. It's this
+  batch's existing number (and plate) if its folders are already in the CSV, otherwise
+  the next free number.
+- **New dataset:** *New…* asks for a name and a folder (it suggests the experiment
+  folder, the one holding `analyzed/`), and writes `<folder>/<name>.yml` from
+  `configs/examples/dataset-example.yml`: `batch_csv: <name>-batches.csv`,
+  `output_dir: reports/<name>`, `trace_batches: all`, and `conditions` / `colors` filled
+  in from the selected plate map (each label mapped to itself, Okabe–Ito colors). Add
+  other batches' spellings to `conditions` as you go (§4.1). The launcher remembers
+  configs outside `R_reports/configs/` in `configs/known-datasets.txt`. *Open…* adds an
+  existing one, and picking a data folder adds any dataset config in its plate/batch
+  folder or the folder above it.
+- **A batch on several plates** (e.g. genotypes split across plates): give each plate
+  its own folder holding its plate map and timeforce files (directly or in
+  `timeforce/`), e.g. `SR4370/dmd/` and `SR4370/wt/`. Pick the plate folder (or its
+  `timeforce/`), fill in its *plate* name, and run each plate with *Register* ticked
+  and the same batch #. With a plate name, outputs go next to the plate folders,
+  under each plate folder's name, and every analyzed file name ends in `_<plate>`:
+
+  ```
+  SR4370/
+  ├── dmd/  wt/                        # plate folders: plate map + timeforce files
+  ├── analyzed/
+  │   ├── dmd/  75Hz/ Twitch/ FF/ Fatigue/   # d3_..._waveformkinetics_DMD.xlsx
+  │   └── wt/   ...                          # d3_..._waveformkinetics_WT.xlsx
+  └── reports/
+      ├── dmd/plates/  wt/plates/      # each plate's plate trace report
+      └── emt/                         # the batch's EMT report, all plates
+  ```
+
+  The EMT report is one per batch: each run re-renders it from every plate registered
+  for that batch so far, into `<batch folder>/reports/emt/`
+  (`<dataset output_dir>/batch-<n>/emt/` if the plate folders don't share a parent).
+  Its conditions come from the dataset config, so list every plate's labels there.
+  If the analyzed folder a run would write to already holds results from another data
+  folder (e.g. a second plate run without its plate name), the launcher asks before
+  continuing. Registering refuses two plates of a batch sharing an analyzed folder.
+- **Dataset batch CSV:** existing rows for that batch × analysis keep their `exclude`
+  value and any extra columns. Only `directory` (and `plate_map` for `timeforce`) is
+  updated. Before any change, the CSV is copied to `<csv>.bak-<timestamp>`.
 - **Generated configs** are saved in `<batch>/reports/_configs/`. To re-render by
   hand: `Rscript render-report.R <batch>/reports/_configs/emt.yml`.
-- **Rscript** is found automatically (macOS: `/usr/local/bin`, Homebrew, R.framework;
-  Windows: `Program Files\R` and per-user installs). Otherwise set it in the launcher.
-  Quarto is the copy `uv sync` installed into `.venv/` (see §2).
+
+### 11.2 Dataset reports section (whenever you like)
+
+Pick a dataset (any config in `configs/`). The table lists its registered batches:
+their folder, which of 75Hz / FF / Fatigue / raw data each has, and anything marked
+`exclude` in the batch CSV. *Refresh* re-reads the configs and CSV, for example after
+you've edited the CSV by hand. Tick the reports and click **Run dataset reports**:
+
+| Option | What it does | Output |
+|---|---|---|
+| Dataset EMT report | The multi-batch EMT report (§1–9), batch-level stats | the config's `output_dir` |
+| Combined plate trace report | Every batch with a `timeforce` row in one plate report (§10.7); a batch on several plates gets a tab per plate (`Batch 4 · A`) | `<output_dir>/plates/` |
+
+No analyses run here. Batches that were registered before `timeforce` rows existed
+have no raw data in the table; re-run them in the Batch section with only *Register*
+ticked, or add the rows by hand (§3.2).
+
+### 11.3 Without the launcher
 
 The launcher calls `render-pipeline.R`, which also works on its own:
 
 ```bash
 cd R_reports
+# Run batch (reports only; the analyses are Python)
 Rscript render-pipeline.R --timeforce-dir ../sample_data/timeforce \
   --plate-map "../sample_data/R672C Plate Map.csv" --analyzed-dir ../sample_data/analyzed \
   --reports-dir ../sample_data/reports --name "R672C Batch 3" --plates --emt-batch \
-  [--dataset-config configs/mydataset.yml --batch-number 3]
+  [--dataset-config configs/mydataset.yml --register --batch-number 3 [--plate A]]
+
+# Run dataset reports
+Rscript render-pipeline.R --dataset-config configs/mydataset.yml --dataset-emt --dataset-plates
 ```
+
+**Rscript** is found automatically (macOS: `/usr/local/bin`, Homebrew, R.framework;
+Windows: `Program Files\R` and per-user installs). Otherwise set it in the launcher.
+Quarto is the copy `uv sync` installed into `.venv/` (see §2).

@@ -30,7 +30,7 @@ prep_kinetics_traces <- function(traces, stim_time_s = 48, window_s = 3,
     filter(day <= days_max,
            time > stim_time_s,
            time < stim_time_s + window_s) |>
-    group_by(condition, day, batch) |>
+    group_by(across(any_of(c("condition", "day", "batch", "plate")))) |>
     mutate(
       in_baseline  = time <= stim_time_s + baseline_s + 1e-9,
       # If the baseline window catches no samples, fall back to the first one
@@ -44,7 +44,7 @@ prep_kinetics_traces <- function(traces, stim_time_s = 48, window_s = 3,
 }
 
 #' Panel A (type = "normalized") or panel B (type = "active").
-#' One line per condition per batch.
+#' One line per condition per batch (per plate, if a batch was run on several).
 kinetics_trace_plot <- function(kin, type = c("normalized", "active"),
                                 colors, window_s = 3, ncol = 5) {
   type <- match.arg(type)
@@ -52,7 +52,7 @@ kinetics_trace_plot <- function(kin, type = c("normalized", "active"),
     ggplot(aes(x = rel_time,
                y = if (type == "normalized") new_norm * 100 else bk_sub_force,
                color = condition,
-               group = interaction(condition, batch))) +
+               group = interaction(condition, batch, if ("plate" %in% names(kin)) plate else ""))) +
     geom_line() +
     facet_wrap(~formal_date, ncol = ncol, scales = "free") +
     theme_prism() +

@@ -1,0 +1,246 @@
+---
+title: "EMT Plate Traces: All Batches"
+params:
+  config: "configs/plates/combined.yml"
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    embed-resources: true
+    fig-dpi: 96
+    page-layout: full
+execute:
+  echo: false
+  message: false
+  warning: false
+---
+
+```{r setup}
+#| include: false
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(ggprism)
+  library(knitr)
+})
+for (f in list.files("R", pattern = "\\.R$", full.names = TRUE)) source(f)
+
+ccfg <- load_combined_plate_config(params$config)
+cfg <- ccfg$settings            # shared settings: protocols, plot sizes, animation
+batches <- names(ccfg$batches)
+
+import_warnings <- character()
+pms <- map(ccfg$batches, \(b) withCallingHandlers(read_plate_map(b$plate_map, b$conditions),
+  warning = function(w) {
+    import_warnings <<- c(import_warnings, conditionMessage(w))
+    invokeRestart("muffleWarning")
+  }))
+# One color per group across every batch, so a condition looks the same everywhere
+group_levels <- unique(unlist(map(pms, \(pm) levels(pm$group))))
+cols <- plate_colors(factor(group_levels, levels = group_levels), cfg$colors)
+
+files <- list_combined_timeforce_files(ccfg)
+protocols <- c(intersect(names(cfg$protocols), files$protocol),
+               sort(setdiff(unique(files$protocol), names(cfg$protocols))))
+png_dir  <- file.path(ccfg$output_dir, "plate-traces")
+anim_dir <- file.path(ccfg$output_dir, "animations")
+
+# Image links must be relative to this .qmd's folder (see plate-report.qmd)
+img_link <- function(path) {
+  as.character(fs::path_rel(normalizePath(path), start = normalizePath(getwd())))
+}
+
+describe_protocol <- function(p) {
+  s <- protocol_settings(cfg, p)
+  if (identical(s$type, "snapshot")) {
+    sprintf("Snapshot of one contraction: %g s before to %g s after t = %g s (x = 0).",
+            s$pre_s, s$post_s, s$time_s)
+  } else if (is.null(s$end_s)) {
+    "Whole recording (no `end_s` set for this protocol)."
+  } else {
+    sprintf("Whole protocol, 0–%g s. Anything recorded after %g s is not shown.", s$end_s, s$end_s)
+  }
+}
+
+plate_map_table <- function(pm, conditions) {
+  pm |>
+    mutate(cell = if (is.null(conditions)) coalesce(label, "") else
+             ifelse(is.na(label) | label == as.character(group), coalesce(label, ""),
+                    paste0(label, " → ", group))) |>
+    select(row, col, cell) |>
+    pivot_wider(names_from = col, values_from = cell) |>
+    rename(` ` = row) |>
+    kable()
+}
+```
+
+**Report:** `r ccfg$name` · **Batches:** `r length(batches)` · **Config:** `r params$config` · **Rendered:** `r format(Sys.time(), "%Y-%m-%d %H:%M")`
+
+## Summary
+
+```{r settings}
+tibble(
+  Batch = batches,
+  `Time-force folder` = map_chr(ccfg$batches, "timeforce_dir"),
+  `Plate map` = basename(map_chr(ccfg$batches, "plate_map")),
+  Format = map_chr(batches, \(b) paste(unique(files$format[files$batch == b]), collapse = " + ")),
+  Days = map_chr(batches, \(b) paste(sort(unique(files$day[files$batch == b])), collapse = ", ")),
+  Files = map_int(batches, \(b) sum(files$batch == b))
+) |> kable()
+```
+
+Output folder: ``r normalizePath(ccfg$output_dir, mustWork = FALSE)``
+
+### Plate maps
+
+::: {.panel-tabset}
+
+```{r plate-maps}
+#| results: asis
+for (b in batches) {
+  cat("\n\n#### ", b, "\n\n", sep = "")
+  print(plate_map_table(pms[[b]], ccfg$batches[[b]]$conditions))
+}
+```
+
+:::
+
+### Files found
+
+```{r files}
+#| results: asis
+if (nrow(files) == 0) {
+  cat("::: {.callout-warning}\nNo time-force files with a `d<day>_` and `_<protocol>` in their name were found.\n:::\n")
+} else {
+  cat("Each cell lists the batches with a file for that day × protocol.\n\n")
+  files |>
+    group_by(day, protocol) |>
+    summarise(b = paste(sub("^.*?(\\d+)$", "\\1", as.character(sort(batch))), collapse = ", "),
+              .groups = "drop") |>
+    pivot_wider(names_from = protocol, values_from = b, values_fill = "–") |>
+    arrange(day) |>
+    select(day, any_of(protocols)) |>
+    rename(Day = day) |>
+    kable() |> print()
+}
+dups <- attr(files, "duplicates")
+if (nrow(dups)) {
+  cat("\n::: {.callout-warning}\n## More than one file for a day × protocol\nThe newest file is plotted. Not used:\n\n",
+      paste0("- ", dups$batch, " d", dups$day, " ", dups$protocol, ": `", basename(dups$file), "`",
+             collapse = "\n"),
+      "\n:::\n", sep = "")
+}
+misfiled <- attr(files, "misfiled")
+if (NROW(misfiled)) {
+  cat("\n::: {.callout-warning}\n## Files in a folder for a different protocol\nPlotted under the protocol in the file name:\n\n",
+      paste0("- ", misfiled$batch, ": `", misfiled$folder, "/", basename(misfiled$file), "` → ",
+             misfiled$protocol, collapse = "\n"),
+      "\n:::\n", sep = "")
+}
+skipped <- attr(files, "skipped")
+if (nrow(skipped)) {
+  cat("\n::: {.callout-note collapse=\"true\"}\n## Skipped (no day or protocol in the file name)\n\n",
+      paste0("- ", skipped$batch, ": `", basename(skipped$file), "`", collapse = "\n"),
+      "\n:::\n", sep = "")
+}
+if (length(import_warnings)) {
+  cat("\n::: {.callout-warning}\n## Plate map warnings\n\n",
+      paste0("- ", unique(import_warnings), collapse = "\n"), "\n:::\n", sep = "")
+}
+```
+
+Each protocol has one tab per batch, and each batch one tab per day. Plots are laid out like the plate; panel titles give the well and its plate-map label, and the grey number is the maximum force (μN) in that panel. Within a day's plot every well has the same x and y limits, set from that day. In the **All days ▶** animations the x and y limits are fixed across every day **of every batch** for that protocol, so the batches can be compared directly by flipping between their tabs. PNGs are saved to ``r png_dir``, animations to ``r anim_dir``.
+
+```{r plates}
+#| results: asis
+callout <- function(type, ...) cat("::: {.callout-", type, "}\n", ..., "\n:::\n\n", sep = "")
+x_label_for <- function(p) {
+  s <- protocol_settings(cfg, p)
+  if (identical(s$type, "snapshot")) paste0("Time from ", s$time_s, " s (s)") else "Time (s)"
+}
+show_image <- function(res, what) {
+  if (inherits(res, "error")) callout("warning", "Could not draw ", what, ": ", conditionMessage(res))
+  else cat("![](", img_link(res), "){width=100%}\n\n", sep = "")
+}
+
+# Read every file of every batch, then draw every image, both in worker processes
+# (R/parallel.R). The animations share limits across all batches and days of a
+# protocol, so everything is read first.
+traces <- load_protocol_traces(files$file, files$protocol, cfg)
+ok <- map_lgl(traces, \(tr) !inherits(tr, "error") && nrow(tr$data) > 0)
+lims <- list()
+jobs <- list()
+for (p in protocols) {
+  okp <- which(files$protocol == p & ok)
+  if (length(okp)) lims[[p]] <- plate_limits(traces[okp])
+  for (b in batches) {
+    okb <- intersect(okp, which(files$batch == b))
+    if (isTRUE(cfg$animation) && length(okb) >= 2) {
+      jobs[[paste0("gif:", p, ":", b)]] <- plate_gif_job(
+        traces[okb], pms[[b]], lims[[p]], titles = paste0("Day ", files$day[okb]),
+        subtitle = paste0(b, " · ", p), x_label = x_label_for(p),
+        file = file.path(anim_dir, paste0(safe_filename(b), "_", safe_filename(p), "_all-days.gif")))
+    }
+    for (i in okb) {
+      jobs[[paste0("png:", i)]] <- plate_png_job(
+        traces[[i]], pms[[b]], title = paste0(b, " · Day ", files$day[i], " · ", p),
+        x_label = x_label_for(p),
+        file = file.path(png_dir, p, paste0(safe_filename(paste0(b, "_d", files$day[i], "_", p)), ".png")))
+    }
+  }
+}
+drawn <- setNames(run_plate_jobs(unname(jobs), cols, cfg), names(jobs))
+
+for (p in protocols) {
+  cat("\n\n## ", p, "\n\n", describe_protocol(p), "\n\n", sep = "")
+  s <- protocol_settings(cfg, p)
+  snap <- identical(s$type, "snapshot")
+
+  cat("::: {.panel-tabset}\n\n")
+  for (b in batches) {
+    idx <- which(files$protocol == p & files$batch == b)
+    cat("\n\n### ", b, "\n\n", sep = "")
+    if (!length(idx)) {
+      callout("note", "No ", p, " files for ", b, ".")
+      next
+    }
+    cat("::: {.panel-tabset}\n\n")
+
+    key <- paste0("gif:", p, ":", b)
+    if (!is.null(jobs[[key]])) {
+      cat("\n\n#### All days ▶\n\n")
+      res <- drawn[[key]]
+      if (!inherits(res, "error")) {
+        cat("Days ", paste(files$day[idx[ok[idx]]], collapse = ", "), ", ", cfg$animation_delay_s,
+            " s per day. Same x and y limits on every day of every batch (y: ",
+            round(lims[[p]]$y[1]), "–", round(lims[[p]]$y[2]), " μN).\n\n", sep = "")
+      }
+      show_image(res, "the animation")
+    }
+
+    for (i in idx) {
+      cat("\n\n#### Day ", files$day[i], "\n\n", sep = "")
+      tr <- traces[[i]]
+      if (inherits(tr, "error")) {
+        callout("warning", "Could not read `", basename(files$file[i]), "`: ", conditionMessage(tr))
+        next
+      }
+      if (nrow(tr$data) == 0) {
+        callout("warning", "`", basename(files$file[i]), "` has no data in the plotted window (",
+                paste(tr$window, collapse = "–"), " s).")
+        next
+      }
+      if (!snap && !is.null(s$end_s) && tr$file_end < s$end_s - 1) {
+        callout("note", "Recording ends at ", round(tr$file_end, 1),
+                " s, before the expected protocol end (", s$end_s, " s).")
+      }
+      cat("`", basename(files$file[i]), "`\n\n", sep = "")
+      # Embed the saved PNG rather than print() (see plate-report.qmd)
+      show_image(drawn[[paste0("png:", i)]], paste0("`", basename(files$file[i]), "`"))
+    }
+    cat("\n:::\n\n")
+  }
+  cat("\n:::\n\n")
+}
+rm(traces, jobs)
+par_stop()
+```

@@ -36,8 +36,10 @@ fatigue_trace_columns <- c(
 )
 
 # Columns that identify a well/stim rather than being a metric
+# `plate` is the batch CSV's plate column (one batch run on several plates);
+# `Plate` is the plate name the analysis scripts read from the file names.
 metric_id_columns <- c("Plate", "Well", "Condition", "Stim Peak Time",
-                       "Stim Number", "Hz", "file", "day", "batch")
+                       "Stim Number", "Hz", "file", "day", "batch", "plate")
 
 # Batch sheet ----------------------------------------------------------------
 
@@ -49,9 +51,13 @@ read_batch_sheet <- function(path, analysis = NULL, batches = NULL) {
   if (length(miss)) stop("Batch CSV ", path, " is missing column(s): ",
                          paste(miss, collapse = ", "), call. = FALSE)
   if (!"exclude" %in% names(b)) b$exclude <- 0
+  # Optional: which plate of the batch a row is, when one batch was run on several
+  # plates. Blank = the batch's only plate.
+  if (!"plate" %in% names(b)) b$plate <- ""
   b <- b |>
     mutate(analysis = tolower(trimws(analysis)),
-           exclude  = coalesce(as.integer(exclude), 0L))
+           exclude  = coalesce(as.integer(exclude), 0L),
+           plate    = coalesce(trimws(as.character(plate)), ""))
   attr(b, "excluded") <- filter(b, exclude != 0)
   b <- filter(b, exclude == 0)
   if (!is.null(analysis)) b <- filter(b, .data$analysis == tolower(!!analysis))
@@ -156,12 +162,12 @@ import_traces <- function(batch_csv, analysis, conditions, batches = "all") {
   sheet <- emt_sheets[[analysis]]$traces
   mapping <- if (analysis == "fatigue") fatigue_trace_columns else trace_columns
 
-  pmap(list(b$directory, b$batch), function(dir, batch) {
+  pmap(list(b$directory, b$batch, b$plate), function(dir, batch, plate) {
     list_day_files(dir, batch) |>
       pmap(function(file, day) {
         read_sheet_checked(file, sheet, batch) |>
           rename_required(mapping, file, batch) |>
-          mutate(day = day, batch = batch)
+          mutate(day = day, batch = batch, plate = plate)
       }) |>
       list_rbind()
   }) |>
@@ -195,11 +201,11 @@ import_metrics <- function(batch_csv, analysis, conditions, batches = "all") {
                          " for the requested batches.", call. = FALSE)
   sheet <- emt_sheets[[analysis]]$metrics
 
-  pmap(list(b$directory, b$batch), function(dir, batch) {
+  pmap(list(b$directory, b$batch, b$plate), function(dir, batch, plate) {
     list_day_files(dir, batch) |>
       pmap(function(file, day) {
         read_sheet_checked(file, sheet, batch) |>
-          mutate(file = basename(file), day = day, batch = batch) |>
+          mutate(file = basename(file), day = day, batch = batch, plate = plate) |>
           pivot_longer(cols = where(is.numeric) & !any_of(metric_id_columns),
                        names_to = "metric", values_to = "value") |>
           select(any_of(metric_id_columns), metric, value) |>
@@ -222,7 +228,7 @@ qc_nonpositive_force <- function(metrics, analysis,
   if (!"Hz" %in% names(bad)) bad$Hz <- NA_real_
   bad |>
     group_by(batch, day, Condition) |>
-    summarise(wells = n_distinct(Plate, Well),
+    summarise(wells = n_distinct(plate, Plate, Well),
               Hz = paste(sort(unique(na.omit(Hz))), collapse = ", "),
               .groups = "drop") |>
     mutate(analysis = analysis, .before = 1)
@@ -231,7 +237,7 @@ qc_nonpositive_force <- function(metrics, analysis,
 #' Sample-size table: wells per condition x day x batch.
 well_counts <- function(metrics) {
   metrics |>
-    distinct(batch, day, Condition, Plate, Well) |>
+    distinct(batch, day, Condition, plate, Plate, Well) |>
     count(batch, day, Condition, name = "wells") |>
     pivot_wider(names_from = Condition, values_from = wells, values_fill = 0) |>
     arrange(batch, day)

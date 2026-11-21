@@ -32,7 +32,12 @@ from tqdm import tqdm
 import uuid
 import json
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import sys
+from concurrent.futures import as_completed
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from file_pool import FilePool, raise_if_crashed, reserve_output_paths, tag_suffix  # noqa: E402
+from filenames import protocol_from_filename  # noqa: E402
 
 # ==========================================
 #        CONFIGURATION SECTION
@@ -63,7 +68,7 @@ PEAK_SEARCH_WINDOW = 0.7 # Window after T0 to search for peak
 
 T0_PAIRS = []            # Will store all stimulation start times
 BLOCK_INFO = []          # Will store block information for each stim
-DEFAULT_MAX_WORKERS = max(1, min(8, (os.cpu_count() or 1)))
+DEFAULT_MAX_WORKERS = max(1, os.cpu_count() or 1)
 
 def select_files(title, file_types):
     root = tk.Tk()
@@ -76,8 +81,6 @@ def select_directory(title):
     root.withdraw()
     directory = filedialog.askdirectory(title=title)
     return directory
-
-
 
 
 def _timestamp_suffix():
@@ -180,7 +183,7 @@ def parse_filename(filename):
             day_index = parts.index(day)
             if day_index + 1 < len(parts) and day_index + 2 < len(parts):
                 plate_name = parts[day_index + 1]
-                protocol = parts[day_index + 2]
+                protocol = protocol_from_filename(filename)
                 return day, protocol, plate_name
         except ValueError: 
              pass 
@@ -705,7 +708,8 @@ def calculate_condition_average_waveforms(list_of_processed_dfs):
     return avg_waveforms_by_condition
 
 
-def generate_fatigue_reference(df_sample_input, t0_pairs_ref, block_info_ref, output_dir_path, day_str_ref, protocol_str_ref): 
+def generate_fatigue_reference(df_sample_input, t0_pairs_ref, block_info_ref, output_dir_path, day_str_ref, protocol_str_ref,
+                               file_tag=""):
     """Generate detailed reference document for fatigue protocol analysis"""
     
     example_well_str = None 
@@ -869,7 +873,7 @@ def generate_fatigue_reference(df_sample_input, t0_pairs_ref, block_info_ref, ou
         "peak detection even with variable rest durations between blocks."
     ])
     
-    reference_file_path = os.path.join(output_dir_path, f"{day_str_ref}_{protocol_str_ref}_fatigue_reference.md") 
+    reference_file_path = os.path.join(output_dir_path, f"{day_str_ref}_{protocol_str_ref}_fatigue_reference{tag_suffix(file_tag)}.md") 
     try:
         with open(reference_file_path, 'w', encoding='utf-8') as f_out: 
             f_out.write('\n'.join(reference_list))
@@ -878,9 +882,9 @@ def generate_fatigue_reference(df_sample_input, t0_pairs_ref, block_info_ref, ou
         print(f"Error writing fatigue reference: {e_write}")
 
 
-def process_and_combine(input_files, plate_map, output_dir, max_recording_time, max_workers=DEFAULT_MAX_WORKERS):
+def process_and_combine(input_files, plate_map, output_dir, max_recording_time, max_workers=DEFAULT_MAX_WORKERS,
+                        file_tag=""):
     processed_data = {}
-    average_traces = {}
 
     input_files = list(input_files or [])
     if not input_files:
@@ -889,9 +893,9 @@ def process_and_combine(input_files, plate_map, output_dir, max_recording_time, 
     workers = max_workers if max_workers and max_workers > 0 else DEFAULT_MAX_WORKERS
     ordered_results = [None] * len(input_files)
 
-    with ThreadPoolExecutor(max_workers=workers) as executor:
+    with FilePool(__file__, {"T0_PAIRS": T0_PAIRS, "BLOCK_INFO": BLOCK_INFO}, min(workers, len(input_files))) as pool:
         futures = {
-            executor.submit(_process_single_file, input_file, plate_map, max_recording_time): idx
+            pool.submit("_process_single_file", input_file, plate_map, max_recording_time): idx
             for idx, input_file in enumerate(input_files)
         }
         for future in tqdm(as_completed(futures), total=len(futures), desc="Processing files"):
@@ -899,6 +903,7 @@ def process_and_combine(input_files, plate_map, output_dir, max_recording_time, 
             try:
                 ordered_results[idx] = future.result()
             except Exception as e:
+                raise_if_crashed(e)
                 print(f"Error processing file {input_files[idx]}: {e}")
 
     for result in ordered_results:
@@ -916,74 +921,90 @@ def process_and_combine(input_files, plate_map, output_dir, max_recording_time, 
             processed_data[(day, protocol)][condition].append(condition_df)
 
     # --- Output Generation ---
-    for (day, protocol), conditions in processed_data.items():
-        average_traces[(day, protocol)] = {}
-        for condition, data_list in conditions.items():
-            # Use Condition Average Waveforms logic
-            average_traces[(day, protocol)][condition] = calculate_condition_average_waveforms(data_list)
-
-        # Output file
-        output_filename = f"{day}_{protocol}_FatigueAnalysis.xlsx"
-        output_path = make_timestamped_path_if_exists(os.path.join(output_dir, output_filename))
-
-        print(f"Creating workbook for {day}_{protocol}")
-        wb = Workbook()
-        wb.remove(wb.active)
-
-        all_peak_data = []  # Collect all peaks for summary
-
-        # 1. Condition Sheets (Full Data)
-        for condition, data_list in conditions.items():
-            if not data_list:
-                continue
-            combined_continuous = pd.concat(data_list, ignore_index=True)
-
-            # Add Condition Sheet
-            df_to_excel_sheet(wb, f"{condition}", combined_continuous)
-
-            all_peak_data.extend(data_list)  # Collect for summary
-
-        # 2. Create Fatigue Summaries
-        if all_peak_data:
-            fatigue_detail_df, fatigue_summary_df = create_fatigue_analysis_summary(all_peak_data)
-
-            if not fatigue_summary_df.empty:
-                df_to_excel_sheet(wb, "Fatigue Summary", fatigue_summary_df)
-
-            if not fatigue_detail_df.empty:
-                df_to_excel_sheet(wb, "Fatigue Detail", fatigue_detail_df)
-
-            # 3. Condition Avg Fatigue (New Sheet)
-            combined_all_data = pd.concat(all_peak_data, ignore_index=True)
-            peaks_only = combined_all_data[combined_all_data['Stim Peak'] == 1]
-            avg_fatigue_progression = calculate_average_fatigue_progression(peaks_only)
-            if not avg_fatigue_progression.empty:
-                df_to_excel_sheet(wb, "Condition Avg Fatigue", avg_fatigue_progression)
-
-        # 4. Condition Avg Waveforms (Representative Traces)
-        avg_waves_list = []
-        for cond in conditions.keys():
-            if cond in average_traces[(day, protocol)]:
-                avg_wave = average_traces[(day, protocol)][cond]
-                if not avg_wave.empty:
-                    avg_wave['Condition'] = cond
-                    avg_waves_list.append(avg_wave)
-
-        if avg_waves_list:
-            all_avg_waves = pd.concat(avg_waves_list, ignore_index=True)
-            df_to_excel_sheet(wb, "Condition Avg Waveforms", all_avg_waves)
-
-        print(f"Saving workbook to {output_path}")
-        wb.save(output_path)
-
-        # Generate Reference
-        if all_peak_data:
-            # Just grab the first dataframe to extract sample data
-            sample_df = all_peak_data[0]
-            generate_fatigue_reference(sample_df, T0_PAIRS, BLOCK_INFO, output_dir, day, protocol)
+    group_items = list(processed_data.items())
+    # Names are picked up front so two groups mapping to the same file name
+    # (e.g. FF names ignore protocol) can't overwrite each other.
+    output_paths = reserve_output_paths([
+        os.path.join(output_dir, f"{day}_{protocol}_FatigueAnalysis{tag_suffix(file_tag)}.xlsx") for (day, protocol), _ in group_items
+    ])
+    with FilePool(__file__, {"T0_PAIRS": T0_PAIRS, "BLOCK_INFO": BLOCK_INFO}, min(workers, len(group_items)) or 1) as pool:
+        group_futures = [
+            pool.submit("_write_group_output", day, protocol, conditions, output_dir, path, file_tag)
+            for ((day, protocol), conditions), path in zip(group_items, output_paths)
+        ]
+        for future in group_futures:
+            future.result()
 
 
-def run_fatigue_analysis(input_files, plate_map_path, output_dir, max_workers=DEFAULT_MAX_WORKERS):
+def _write_group_output(day, protocol, conditions, output_dir, output_path, file_tag=""):
+    """Build and save the workbook (and reference doc) for one day/protocol."""
+    average_traces = {}
+    average_traces[(day, protocol)] = {}
+    for condition, data_list in conditions.items():
+        # Use Condition Average Waveforms logic
+        average_traces[(day, protocol)][condition] = calculate_condition_average_waveforms(data_list)
+
+    # Output file
+
+    print(f"Creating workbook for {day}_{protocol}")
+    wb = Workbook()
+    wb.remove(wb.active)
+
+    all_peak_data = []  # Collect all peaks for summary
+
+    # 1. Condition Sheets (Full Data)
+    for condition, data_list in conditions.items():
+        if not data_list:
+            continue
+        combined_continuous = pd.concat(data_list, ignore_index=True)
+
+        # Add Condition Sheet
+        df_to_excel_sheet(wb, f"{condition}", combined_continuous)
+
+        all_peak_data.extend(data_list)  # Collect for summary
+
+    # 2. Create Fatigue Summaries
+    if all_peak_data:
+        fatigue_detail_df, fatigue_summary_df = create_fatigue_analysis_summary(all_peak_data)
+
+        if not fatigue_summary_df.empty:
+            df_to_excel_sheet(wb, "Fatigue Summary", fatigue_summary_df)
+
+        if not fatigue_detail_df.empty:
+            df_to_excel_sheet(wb, "Fatigue Detail", fatigue_detail_df)
+
+        # 3. Condition Avg Fatigue (New Sheet)
+        combined_all_data = pd.concat(all_peak_data, ignore_index=True)
+        peaks_only = combined_all_data[combined_all_data['Stim Peak'] == 1]
+        avg_fatigue_progression = calculate_average_fatigue_progression(peaks_only)
+        if not avg_fatigue_progression.empty:
+            df_to_excel_sheet(wb, "Condition Avg Fatigue", avg_fatigue_progression)
+
+    # 4. Condition Avg Waveforms (Representative Traces)
+    avg_waves_list = []
+    for cond in conditions.keys():
+        if cond in average_traces[(day, protocol)]:
+            avg_wave = average_traces[(day, protocol)][cond]
+            if not avg_wave.empty:
+                avg_wave['Condition'] = cond
+                avg_waves_list.append(avg_wave)
+
+    if avg_waves_list:
+        all_avg_waves = pd.concat(avg_waves_list, ignore_index=True)
+        df_to_excel_sheet(wb, "Condition Avg Waveforms", all_avg_waves)
+
+    print(f"Saving workbook to {output_path}")
+    wb.save(output_path)
+
+    # Generate Reference
+    if all_peak_data:
+        # Just grab the first dataframe to extract sample data
+        sample_df = all_peak_data[0]
+        generate_fatigue_reference(sample_df, T0_PAIRS, BLOCK_INFO, output_dir, day, protocol, file_tag)
+
+
+def run_fatigue_analysis(input_files, plate_map_path, output_dir, max_workers=DEFAULT_MAX_WORKERS, file_tag=""):
+    """file_tag (e.g. a plate name) is appended to every output file name."""
     print("=" * 60)
     print("Fatigue Protocol Analysis Script v1.1.3")
     print("=" * 60)
@@ -1008,7 +1029,8 @@ def run_fatigue_analysis(input_files, plate_map_path, output_dir, max_workers=DE
 
     global T0_PAIRS, BLOCK_INFO
     T0_PAIRS, BLOCK_INFO = calculate_fatigue_protocol_times(FATIGUE_PROTOCOL, MAX_RECORDING_TIME)
-    process_and_combine(input_files, plate_map_input_df, output_dir, MAX_RECORDING_TIME, max_workers=max_workers)
+    process_and_combine(input_files, plate_map_input_df, output_dir, MAX_RECORDING_TIME, max_workers=max_workers,
+                        file_tag=file_tag)
 
     print("\nFatigue protocol analysis complete!")
     print("\nKey outputs:")

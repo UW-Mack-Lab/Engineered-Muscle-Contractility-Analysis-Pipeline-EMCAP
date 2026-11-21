@@ -23,7 +23,12 @@ from openpyxl import Workbook
 from tqdm import tqdm
 import uuid
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import sys
+from concurrent.futures import as_completed
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from file_pool import FilePool, raise_if_crashed, reserve_output_paths, tag_suffix  # noqa: E402
+from filenames import protocol_from_filename  # noqa: E402
 
 # ==========================================
 #        CONFIGURATION SECTION
@@ -52,7 +57,7 @@ FAST_PEAK_WARNING_MS = 80
 # ==========================================
 
 T0_PAIRS = []
-DEFAULT_MAX_WORKERS = max(1, min(8, (os.cpu_count() or 1)))
+DEFAULT_MAX_WORKERS = max(1, os.cpu_count() or 1)
 
 
 def select_files(title, file_types):
@@ -166,7 +171,7 @@ def parse_filename(filename):
     if day:
         day_idx = parts.index(day)
         plate_name = parts[day_idx + 1] if len(parts) > day_idx + 1 else "UnknownPlate"
-        protocol = parts[day_idx + 2] if len(parts) > day_idx + 2 else "UnknownProtocol"
+        protocol = protocol_from_filename(filename) or "UnknownProtocol"
         return day, protocol, plate_name
     return None
 
@@ -533,7 +538,8 @@ def pick_representative_traces(combined_df):
     return pd.DataFrame()
 
 
-def run_twitch_analysis(input_files, plate_map_path, output_dir, max_workers=None):
+def run_twitch_analysis(input_files, plate_map_path, output_dir, max_workers=None, file_tag=""):
+    """file_tag (e.g. a plate name) is appended to every output file name."""
     if not input_files:
         raise ValueError("No input files provided.")
     if not plate_map_path or not os.path.isfile(plate_map_path):
@@ -558,13 +564,13 @@ def run_twitch_analysis(input_files, plate_map_path, output_dir, max_workers=Non
     all_kinetics_data = {}
 
     effective_workers = max_workers if max_workers is not None else DEFAULT_MAX_WORKERS
-    effective_workers = max(1, int(effective_workers))
+    effective_workers = max(1, min(int(effective_workers), len(input_files)))
 
     print(f"\nProcessing {len(input_files)} file(s) with max_workers={effective_workers}...")
 
-    with ThreadPoolExecutor(max_workers=effective_workers) as executor:
+    with FilePool(__file__, {"T0_PAIRS": T0_PAIRS}, effective_workers) as pool:
         futures = {
-            executor.submit(_process_single_file, input_file, plate_map, MAX_RECORDING_TIME): input_file
+            pool.submit("_process_single_file", input_file, plate_map, MAX_RECORDING_TIME): input_file
             for input_file in input_files
         }
 
@@ -573,6 +579,7 @@ def run_twitch_analysis(input_files, plate_map_path, output_dir, max_workers=Non
             try:
                 result = future.result()
             except Exception as e:
+                raise_if_crashed(e)
                 print(f"Error processing {os.path.basename(input_file)}: {e}")
                 continue
 
@@ -592,63 +599,76 @@ def run_twitch_analysis(input_files, plate_map_path, output_dir, max_workers=Non
         print("No valid data processed.")
         return None
 
-    for day, protocols in all_kinetics_data.items():
-        for protocol, kinetics_list in protocols.items():
-            if not kinetics_list:
-                continue
-
-            combined_kinetics_df = pd.concat(kinetics_list, ignore_index=True)
-
-            summary_df = calculate_summary_stats(combined_kinetics_df)
-            well_average_df = calculate_well_averages(combined_kinetics_df)
-            representative_df = pick_representative_traces(combined_kinetics_df)
-
-            wb = Workbook()
-            if 'Sheet' in wb.sheetnames:
-                wb.remove(wb['Sheet'])
-
-            desired_cols = [
-                'Time (seconds)', 'Well', 'Condition', 'Plate Name', 'Active Twitch Force (μN)',
-                'Active Twitch Force (μN)_Smoothed', 'Stim Peak', 'Stim Number',
-                'True Peak Force (μN)', 'BK corrected force (μN)', 'Normalized Force (% of T1)',
-                'Fast Peak Warning',
-                'R10 Time', 'R10 Threshold Required (μN)', 'R10 Reached',
-                'R50 Time', 'R50 Threshold Required (μN)', 'R50 Reached',
-                'R80 Time', 'R80 Threshold Required (μN)', 'R80 Reached',
-                'R90 Time', 'R90 Threshold Required (μN)', 'R90 Reached',
-                'TT50P Time', 'TT50P Threshold Required (μN)', 'TT50P Reached',
-                'TTP90 Time', 'TTP90 Threshold Required (μN)', 'TTP90 Reached',
-                'Baseline Force (μN)', 'Baseline Drift From Start (μN)', 'Baseline Drift Rate (μN/s)'
-            ]
-
-            existing_cols = [c for c in desired_cols if c in combined_kinetics_df.columns]
-            kinetics_for_export = combined_kinetics_df[existing_cols].copy()
-
-            df_to_excel_sheet(wb, f"{day}_{protocol}_kinetics", kinetics_for_export)
-
-            if not summary_df.empty:
-                df_to_excel_sheet(wb, f"{day}_{protocol}_summary", summary_df)
-
-            if not well_average_df.empty:
-                df_to_excel_sheet(wb, f"{day}_{protocol}_well_avg", well_average_df)
-
-            if not representative_df.empty:
-                rep_cols = [
-                    'Time (seconds)', 'Well', 'Condition', 'Representative Condition', 'Plate Name',
-                    'Active Twitch Force (μN)', 'Active Twitch Force (μN)_Smoothed',
-                    'Stim Peak', 'Stim Number', 'BK corrected force (μN)'
-                ]
-                rep_cols = [c for c in rep_cols if c in representative_df.columns]
-                df_to_excel_sheet(wb, f"{day}_{protocol}_representative", representative_df[rep_cols])
-
-            output_filename = f"{day}_{protocol}_Twitch_Analyzed.xlsx"
-            output_path = os.path.join(output_dir, output_filename)
-            output_path = make_timestamped_path_if_exists(output_path)
-            wb.save(output_path)
-            print(f"Saved output: {output_path}")
+    groups = [
+        (day, protocol, kinetics_list)
+        for day, protocols in all_kinetics_data.items()
+        for protocol, kinetics_list in protocols.items()
+        if kinetics_list
+    ]
+    # Names are picked up front so parallel writers can't overwrite each other.
+    output_paths = reserve_output_paths([
+        os.path.join(output_dir, f"{day}_{protocol}_Twitch_Analyzed{tag_suffix(file_tag)}.xlsx") for day, protocol, _ in groups
+    ])
+    with FilePool(__file__, {"T0_PAIRS": T0_PAIRS}, min(effective_workers, len(groups)) or 1) as pool:
+        group_futures = [
+            pool.submit("_write_group_output", day, protocol, kinetics_list, output_dir, path)
+            for (day, protocol, kinetics_list), path in zip(groups, output_paths)
+        ]
+        for future in group_futures:
+            future.result()
 
     print("\nTwitch analysis complete.")
     return True
+
+
+def _write_group_output(day, protocol, kinetics_list, output_dir, output_path):
+    """Build and save the workbook for one day/protocol."""
+    combined_kinetics_df = pd.concat(kinetics_list, ignore_index=True)
+
+    summary_df = calculate_summary_stats(combined_kinetics_df)
+    well_average_df = calculate_well_averages(combined_kinetics_df)
+    representative_df = pick_representative_traces(combined_kinetics_df)
+
+    wb = Workbook()
+    if 'Sheet' in wb.sheetnames:
+        wb.remove(wb['Sheet'])
+
+    desired_cols = [
+        'Time (seconds)', 'Well', 'Condition', 'Plate Name', 'Active Twitch Force (μN)',
+        'Active Twitch Force (μN)_Smoothed', 'Stim Peak', 'Stim Number',
+        'True Peak Force (μN)', 'BK corrected force (μN)', 'Normalized Force (% of T1)',
+        'Fast Peak Warning',
+        'R10 Time', 'R10 Threshold Required (μN)', 'R10 Reached',
+        'R50 Time', 'R50 Threshold Required (μN)', 'R50 Reached',
+        'R80 Time', 'R80 Threshold Required (μN)', 'R80 Reached',
+        'R90 Time', 'R90 Threshold Required (μN)', 'R90 Reached',
+        'TT50P Time', 'TT50P Threshold Required (μN)', 'TT50P Reached',
+        'TTP90 Time', 'TTP90 Threshold Required (μN)', 'TTP90 Reached',
+        'Baseline Force (μN)', 'Baseline Drift From Start (μN)', 'Baseline Drift Rate (μN/s)'
+    ]
+
+    existing_cols = [c for c in desired_cols if c in combined_kinetics_df.columns]
+    kinetics_for_export = combined_kinetics_df[existing_cols].copy()
+
+    df_to_excel_sheet(wb, f"{day}_{protocol}_kinetics", kinetics_for_export)
+
+    if not summary_df.empty:
+        df_to_excel_sheet(wb, f"{day}_{protocol}_summary", summary_df)
+
+    if not well_average_df.empty:
+        df_to_excel_sheet(wb, f"{day}_{protocol}_well_avg", well_average_df)
+
+    if not representative_df.empty:
+        rep_cols = [
+            'Time (seconds)', 'Well', 'Condition', 'Representative Condition', 'Plate Name',
+            'Active Twitch Force (μN)', 'Active Twitch Force (μN)_Smoothed',
+            'Stim Peak', 'Stim Number', 'BK corrected force (μN)'
+        ]
+        rep_cols = [c for c in rep_cols if c in representative_df.columns]
+        df_to_excel_sheet(wb, f"{day}_{protocol}_representative", representative_df[rep_cols])
+
+    wb.save(output_path)
+    print(f"Saved output: {output_path}")
 
 
 def main():

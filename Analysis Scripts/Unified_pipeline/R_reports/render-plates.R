@@ -3,6 +3,8 @@
 #   Rscript render-plates.R "/path/to/2026-11-05_R672C-EMT-Batch3"   # a batch folder
 #   Rscript render-plates.R configs/plates/my-batch.yml              # a config
 #   Rscript render-plates.R                                           # every configs/plates/*.yml
+#   Rscript render-plates.R configs/plates/my-dataset.yml            # a config with `batches:`
+#                                                                     # -> one combined report
 # Or in RStudio: source("render-plates.R"), then render_plate_report("<folder or yml>")
 #
 # A batch folder needs exactly one *Plate Map*.csv; time-force CSVs are read
@@ -17,9 +19,11 @@ render_plate_report <- function(config) {
   source("R/emt-config.R", local = TRUE)  # merge_defaults()
   source("R/emt-import.R", local = TRUE)  # recode_conditions()
   source("R/plate-data.R", local = TRUE)
-  cfg <- load_plate_config(config)
+  source("R/plate-combined.R", local = TRUE)
+  combined <- is_combined_plate_config(config)
+  cfg <- if (combined) load_combined_plate_config(config) else load_plate_config(config)
   html <- paste0(gsub("[^A-Za-z0-9]+", "-", tolower(cfg$name)), "-plate-traces.html")
-  render_qmd("plate-report.qmd", config, html)
+  render_qmd(if (combined) "plate-combined-report.qmd" else "plate-report.qmd", config, html)
   dir.create(cfg$output_dir, recursive = TRUE, showWarnings = FALSE)
   dest <- file.path(cfg$output_dir, html)
   move_file(html, dest)

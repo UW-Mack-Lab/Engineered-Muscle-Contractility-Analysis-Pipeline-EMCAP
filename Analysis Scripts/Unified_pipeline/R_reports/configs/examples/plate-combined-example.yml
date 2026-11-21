@@ -1,0 +1,35 @@
+# Example combined plate-trace config: several batches in one report (MANUAL §10.7).
+# Copy it to configs/plates/ (git-ignored) and edit the paths:
+#   cp configs/examples/plate-combined-example.yml configs/plates/mydataset.yml
+#   Rscript render-plates.R configs/plates/mydataset.yml
+# Paths are relative to R_reports/ (or absolute).
+
+name: My Dataset
+output_dir: output/mydataset/plates
+
+# One entry per batch: a map with name / timeforce_dir / plate_map (plus any
+# per-batch overrides, e.g. days), or just a batch folder holding a plate map
+# and a timeforce/ subfolder.
+batches:
+  - name: Batch 1
+    timeforce_dir: /Users/you/.../2026-10-01_R672C-EMT-Batch1/timeforce
+    plate_map: /Users/you/.../2026-10-01_R672C-EMT-Batch1/R672C Plate Map.csv
+  - name: Batch 2
+    timeforce_dir: /Users/you/.../2026-10-15_R672C-EMT-Batch2/timeforce
+    plate_map: /Users/you/.../2026-10-15_R672C-EMT-Batch2/R672C Plate Map.csv
+    days: [3, 4, 5, 6, 7]
+  - ../sample_data
+
+# Everything below is shared by all batches (same keys as a single-plate config).
+days: all
+conditions:
+  WT:       [UC2WT, WT]          # list every spelling used across batches
+  R672CHet: [HetR672C]
+  R672CHom: [HomR672C]
+colors:
+  WT:       "#000000"
+  R672CHet: "#009E73"
+  R672CHom: "#E69F00"
+
+png_dpi: 150           # every batch's PNGs are embedded; lower dpi keeps the HTML smaller
+animation: true        # per batch, x/y limits shared across every day of every batch

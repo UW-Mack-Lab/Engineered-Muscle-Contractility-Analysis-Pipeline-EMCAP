@@ -109,6 +109,13 @@ if (nrow(dups)) {
       paste0("- d", dups$day, " ", dups$protocol, ": `", basename(dups$file), "`", collapse = "\n"),
       "\n:::\n", sep = "")
 }
+misfiled <- attr(files, "misfiled")
+if (NROW(misfiled)) {
+  cat("\n::: {.callout-warning}\n## Files in a folder for a different protocol\nPlotted under the protocol in the file name:\n\n",
+      paste0("- `", misfiled$folder, "/", basename(misfiled$file), "` → ", misfiled$protocol,
+             collapse = "\n"),
+      "\n:::\n", sep = "")
+}
 skipped <- attr(files, "skipped")
 if (nrow(skipped)) {
   cat("\n::: {.callout-note}\n## Skipped (no day or protocol in the file name)\n\n",
@@ -125,43 +132,67 @@ Each plot is laid out like the plate. Panel titles give the well and its plate-m
 ```{r plates}
 #| results: asis
 callout <- function(type, ...) cat("::: {.callout-", type, "}\n", ..., "\n:::\n\n", sep = "")
+x_label_for <- function(p) {
+  s <- protocol_settings(cfg, p)
+  if (identical(s$type, "snapshot")) paste0("Time from ", s$time_s, " s (s)") else "Time (s)"
+}
+show_image <- function(res, what) {
+  if (inherits(res, "error")) callout("warning", "Could not draw ", what, ": ", conditionMessage(res))
+  else cat("![](", img_link(res), "){width=100%}\n\n", sep = "")
+}
+
+# Read every file, then draw every image, both in worker processes (R/parallel.R).
+# Each animation needs its protocol's days read first: limits are shared across days.
+traces <- load_protocol_traces(files$file, files$protocol, cfg)
+ok <- map_lgl(traces, \(tr) !inherits(tr, "error") && nrow(tr$data) > 0)
+jobs <- list()
+for (p in protocols) {
+  okp <- which(files$protocol == p & ok)
+  if (isTRUE(cfg$animation) && length(okp) >= 2) {
+    jobs[[paste0("gif:", p)]] <- plate_gif_job(
+      traces[okp], pm, plate_limits(traces[okp]), titles = paste0("Day ", files$day[okp]),
+      subtitle = paste0(cfg$name, " · ", p), x_label = x_label_for(p),
+      file = file.path(anim_dir, paste0(safe_filename(p), "_all-days.gif")))
+  }
+  for (i in okp) {
+    jobs[[paste0("png:", i)]] <- plate_png_job(
+      traces[[i]], pm, title = paste0(cfg$name, " · Day ", files$day[i], " · ", p),
+      x_label = x_label_for(p),
+      file = file.path(png_dir, p, paste0(safe_filename(paste0("d", files$day[i], "_", p)), ".png")))
+  }
+}
+drawn <- setNames(run_plate_jobs(unname(jobs), cols, cfg), names(jobs))
 
 for (p in protocols) {
   cat("\n\n## ", p, "\n\n", describe_protocol(p), "\n\n", sep = "")
-  pf <- filter(files, protocol == p)
-
-  # Read every day first: the animation needs limits shared across days
-  traces <- map(pf$file, \(f) tryCatch(load_protocol_trace(f, p, cfg), error = function(e) e))
-  ok <- map_lgl(traces, \(tr) !inherits(tr, "error") && nrow(tr$data) > 0)
+  idx <- which(files$protocol == p)
   s <- protocol_settings(cfg, p)
   snap <- identical(s$type, "snapshot")
-  x_lab <- if (snap) paste0("Time from ", s$time_s, " s (s)") else "Time (s)"
 
   cat("::: {.panel-tabset}\n\n")
 
-  if (isTRUE(cfg$animation) && sum(ok) >= 2) {
+  gif <- jobs[[paste0("gif:", p)]]
+  if (!is.null(gif)) {
     cat("\n\n### All days ▶\n\n")
-    lim_all <- plate_limits(traces[ok])
-    frames <- map2(traces[ok], pf$day[ok], \(tr, d)
-      plate_grid_plot(tr, pm, cols, lim_all, title = paste0("Day ", d),
-                      subtitle = paste0(cfg$name, " · ", p), x_label = x_lab))
-    gif <- file.path(anim_dir, paste0(safe_filename(p), "_all-days.gif"))
-    make_plate_animation(frames, gif, cfg$plot_size, cfg$animation_dpi, cfg$animation_delay_s)
-    cat("Days ", paste(pf$day[ok], collapse = ", "), ", ", cfg$animation_delay_s,
-        " s per day. Same x and y limits on every day (y: ",
-        round(lim_all$y[1]), "–", round(lim_all$y[2]), " μN). Saved as `", gif, "`.\n\n",
-        "![](", img_link(gif), "){width=100%}\n\n", sep = "")
+    res <- drawn[[paste0("gif:", p)]]
+    if (!inherits(res, "error")) {
+      cat("Days ", paste(files$day[idx[ok[idx]]], collapse = ", "), ", ", cfg$animation_delay_s,
+          " s per day. Same x and y limits on every day (y: ",
+          round(gif$limits$y[1]), "–", round(gif$limits$y[2]), " μN). Saved as `", gif$file, "`.\n\n",
+          sep = "")
+    }
+    show_image(res, "the animation")
   }
 
-  for (i in seq_len(nrow(pf))) {
-    cat("\n\n### Day ", pf$day[i], "\n\n", sep = "")
+  for (i in idx) {
+    cat("\n\n### Day ", files$day[i], "\n\n", sep = "")
     tr <- traces[[i]]
     if (inherits(tr, "error")) {
-      callout("warning", "Could not read `", basename(pf$file[i]), "`: ", conditionMessage(tr))
+      callout("warning", "Could not read `", basename(files$file[i]), "`: ", conditionMessage(tr))
       next
     }
     if (nrow(tr$data) == 0) {
-      callout("warning", "`", basename(pf$file[i]), "` has no data in the plotted window (",
+      callout("warning", "`", basename(files$file[i]), "` has no data in the plotted window (",
               paste(tr$window, collapse = "–"), " s).")
       next
     }
@@ -169,17 +200,13 @@ for (p in protocols) {
       callout("note", "Recording ends at ", round(tr$file_end, 1),
               " s, before the expected protocol end (", s$end_s, " s).")
     }
-    cat("`", basename(pf$file[i]), "`\n\n", sep = "")
-    plt <- plate_grid_plot(tr, pm, cols, plate_limits(tr),
-                           title = paste0(cfg$name, " · Day ", pf$day[i], " · ", p),
-                           x_label = x_lab)
+    cat("`", basename(files$file[i]), "`\n\n", sep = "")
     # Embed the saved PNG rather than print(): knitr's plot capture inside a
     # results: asis loop can attach each plot to the *next* tab.
-    png <- save_panel(plt, paste0("d", pf$day[i], "_", p), cfg$plot_size,
-                      file.path(png_dir, p), dpi = cfg$png_dpi)
-    cat("![](", img_link(png), "){width=100%}\n\n", sep = "")
+    show_image(drawn[[paste0("png:", i)]], paste0("`", basename(files$file[i]), "`"))
   }
   cat("\n:::\n\n")
-  rm(traces)
 }
+rm(traces, jobs)
+par_stop()
 ```

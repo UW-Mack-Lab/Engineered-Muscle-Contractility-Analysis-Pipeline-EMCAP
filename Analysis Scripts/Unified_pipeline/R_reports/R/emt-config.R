@@ -1,5 +1,6 @@
 # Config loading for the EMT report ------------------------------------------
-# Every dataset-specific choice lives in a YAML file under configs/.
+# Every dataset-specific choice lives in a YAML file: in the experiment folder,
+# or under configs/ (see config_base_dir() for how relative paths resolve).
 # This file fills defaults and validates so the rest of the code can trust it.
 
 emt_config_defaults <- list(
@@ -38,9 +39,33 @@ merge_defaults <- function(x, defaults) {
   x
 }
 
+#' The folder a dataset config's relative paths start from: the config's own
+#' folder (e.g. the experiment folder), except for configs in R_reports/configs/,
+#' whose paths have always been relative to R_reports/. R code runs from R_reports/.
+config_base_dir <- function(path) {
+  dir <- normalizePath(dirname(path), mustWork = FALSE)
+  if (identical(dir, normalizePath("configs", mustWork = FALSE))) normalizePath(".") else dir
+}
+
+is_absolute_path <- function(p) grepl("^(/|~|[A-Za-z]:[/\\\\]|\\\\\\\\)", p)
+
+#' A config's `batch_csv` and `output_dir` as absolute paths (see config_base_dir).
+resolve_config_paths <- function(cfg, path) {
+  base <- config_base_dir(path)
+  for (k in c("batch_csv", "output_dir")) {
+    p <- cfg[[k]]
+    if (is.character(p) && length(p) == 1 && nzchar(p)) {
+      p <- path.expand(p)
+      cfg[[k]] <- normalizePath(if (is_absolute_path(p)) p else file.path(base, p), mustWork = FALSE)
+    }
+  }
+  cfg
+}
+
 load_emt_config <- function(path) {
   if (!file.exists(path)) stop("Config file not found: ", path, call. = FALSE)
   cfg <- merge_defaults(yaml::read_yaml(path), emt_config_defaults)
+  cfg <- resolve_config_paths(cfg, path)
 
   if (is.null(cfg$batch_csv)) stop("Config must set `batch_csv`.", call. = FALSE)
   if (!file.exists(cfg$batch_csv)) {

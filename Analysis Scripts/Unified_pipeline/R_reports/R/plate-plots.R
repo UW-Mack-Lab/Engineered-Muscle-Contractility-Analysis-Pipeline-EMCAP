@@ -61,6 +61,59 @@ plate_grid_plot <- function(trace, plate_map, colors, limits = plate_limits(trac
     labs(x = x_label, y = "Force (μN)", title = title, subtitle = subtitle)
 }
 
+#' One plate image to draw, for run_plate_job(): a day's PNG (one trace, limits
+#' from that trace) or an animation (several traces, shared `limits`, one frame
+#' each). `file` is the output path.
+plate_png_job <- function(trace, plate_map, title, x_label, file) {
+  list(kind = "png", trace = trace, plate_map = plate_map, title = title,
+       x_label = x_label, file = file)
+}
+
+plate_gif_job <- function(traces, plate_map, limits, titles, subtitle, x_label, file) {
+  list(kind = "gif", traces = traces, plate_map = plate_map, limits = limits,
+       titles = titles, subtitle = subtitle, x_label = x_label, file = file)
+}
+
+#' Draw one job (runs in a worker, see par_lapply()). Returns the file path,
+#' or the error so the report can show it instead of stopping.
+run_plate_job <- function(job, colors, cfg) {
+  tryCatch({
+    dir.create(dirname(job$file), recursive = TRUE, showWarnings = FALSE)
+    if (job$kind == "png") {
+      plt <- plate_grid_plot(job$trace, job$plate_map, colors, plate_limits(job$trace),
+                             title = job$title, x_label = job$x_label)
+      ggsave(job$file, plot = plt, width = cfg$plot_size[1], height = cfg$plot_size[2],
+             dpi = cfg$png_dpi)
+    } else {
+      frames <- map2(job$traces, job$titles, \(tr, t)
+        plate_grid_plot(tr, job$plate_map, colors, job$limits, title = t,
+                        subtitle = job$subtitle, x_label = job$x_label))
+      make_plate_animation(frames, job$file, cfg$plot_size, cfg$animation_dpi,
+                           cfg$animation_delay_s)
+    }
+    job$file
+  }, error = identity)
+}
+
+#' Read every file for plotting, in parallel. Returns one entry per file:
+#' the trace, or the error. `protocols` gives each file's protocol.
+load_protocol_traces <- function(files, protocols, cfg) {
+  par_lapply(seq_along(files), \(i, files, protocols, cfg)
+    tryCatch(load_protocol_trace(files[i], protocols[i], cfg), error = identity),
+    files = files, protocols = protocols, cfg = cfg)
+}
+
+#' Draw every job in parallel, animations first (they take longest).
+#' Returns the results (path or error) in the order of `jobs`.
+run_plate_jobs <- function(jobs, colors, cfg) {
+  if (!length(jobs)) return(list())
+  kinds <- vapply(jobs, `[[`, "", "kind")
+  ord <- order(kinds != "gif")
+  out <- vector("list", length(jobs))
+  out[ord] <- par_lapply(jobs[ord], run_plate_job, colors = colors, cfg = cfg)
+  out
+}
+
 #' Write a list of ggplots as an animated GIF, one frame per plot.
 make_plate_animation <- function(plots, file, size = c(14, 8), dpi = 100, delay_s = 1) {
   tmp <- tempfile("frames")

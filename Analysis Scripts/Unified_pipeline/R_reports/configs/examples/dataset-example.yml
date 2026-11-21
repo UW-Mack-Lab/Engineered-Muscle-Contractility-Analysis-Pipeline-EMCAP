@@ -7,8 +7,9 @@
 
 name: My Dataset
 # One row per batch x analysis: batch, analysis (ff/75hz/fatigue), directory
-# (folder holding that analysis's .xlsx workbooks), exclude (1 = skip).
-# The launcher's "Add to dataset report" adds rows here for you.
+# (folder holding that analysis's .xlsx workbooks), exclude (1 = skip); plus a
+# `timeforce` row per batch (raw folder, optional plate_map) for the combined
+# plate report. The launcher's "Register in dataset" adds these rows for you.
 batch_csv: configs/mydataset-batches.csv
 output_dir: output/mydataset
 
@@ -62,6 +63,13 @@ stats:
   unit: batch        # batch = average wells within each batch first; well = pseudo-replicated
   paired: false      # true = paired t-test across batches (each batch has every condition)
   p_adjust: BH       # any p.adjust method; applied within each metric
+
+# Combined plate trace report (launcher: Dataset reports -> Combined plate trace
+# report). Uses the batch CSV's `timeforce` rows. Optional overrides of the plate
+# settings (MANUAL §10.3), e.g.:
+# plates:
+#   days: [3, 4, 5, 6, 7]
+#   png_dpi: 150
 
 sweep: true          # superplot every metric in every analysis
 seed: 1

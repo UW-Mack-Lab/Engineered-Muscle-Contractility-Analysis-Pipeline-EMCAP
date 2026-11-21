@@ -86,7 +86,7 @@ if (length(not_used)) {
 }
 if (nrow(excluded)) {
   cat("\n**Excluded in the batch CSV:**\n\n")
-  print(kable(excluded |> select(batch, analysis, directory)))
+  print(kable(excluded |> select(any_of(c("batch", "plate", "analysis", "directory")))))
 }
 qc <- bind_rows(qc_nonpositive_force(m75, "75hz"),
                 qc_nonpositive_force(mff, "ff"),

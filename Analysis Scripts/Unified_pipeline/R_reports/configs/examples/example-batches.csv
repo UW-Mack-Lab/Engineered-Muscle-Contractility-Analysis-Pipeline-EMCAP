@@ -1,7 +1,9 @@
-batch,analysis,directory,exclude
-1,ff,/Users/you/Library/CloudStorage/OneDrive-UW/.../2026-10-01_R672C-EMT-Batch1/analyzed/FF/,0
-1,75hz,/Users/you/Library/CloudStorage/OneDrive-UW/.../2026-10-01_R672C-EMT-Batch1/analyzed/75Hz/,0
-1,fatigue,/Users/you/Library/CloudStorage/OneDrive-UW/.../2026-10-01_R672C-EMT-Batch1/analyzed/Fatigue/,0
-2,ff,C:/Users/you/OneDrive - UW/.../2026-10-15_R672C-EMT-Batch2/analyzed/FF/,0
-2,75hz,C:/Users/you/OneDrive - UW/.../2026-10-15_R672C-EMT-Batch2/analyzed/75Hz/,0
-2,fatigue,C:/Users/you/OneDrive - UW/.../2026-10-15_R672C-EMT-Batch2/analyzed/Fatigue/,1
+batch,analysis,directory,exclude,plate_map
+1,ff,/Users/you/Library/CloudStorage/OneDrive-UW/.../2026-10-01_R672C-EMT-Batch1/analyzed/FF/,0,
+1,75hz,/Users/you/Library/CloudStorage/OneDrive-UW/.../2026-10-01_R672C-EMT-Batch1/analyzed/75Hz/,0,
+1,fatigue,/Users/you/Library/CloudStorage/OneDrive-UW/.../2026-10-01_R672C-EMT-Batch1/analyzed/Fatigue/,0,
+1,timeforce,/Users/you/Library/CloudStorage/OneDrive-UW/.../2026-10-01_R672C-EMT-Batch1/timeforce,0,/Users/you/Library/CloudStorage/OneDrive-UW/.../2026-10-01_R672C-EMT-Batch1/R672C Plate Map.csv
+2,ff,C:/Users/you/OneDrive - UW/.../2026-10-15_R672C-EMT-Batch2/analyzed/FF/,0,
+2,75hz,C:/Users/you/OneDrive - UW/.../2026-10-15_R672C-EMT-Batch2/analyzed/75Hz/,0,
+2,fatigue,C:/Users/you/OneDrive - UW/.../2026-10-15_R672C-EMT-Batch2/analyzed/Fatigue/,1,
+2,timeforce,C:/Users/you/OneDrive - UW/.../2026-10-15_R672C-EMT-Batch2/timeforce,0,

@@ -28,7 +28,12 @@ from openpyxl.utils import get_column_letter
 from tqdm import tqdm
 import uuid
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import sys
+from concurrent.futures import as_completed
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from file_pool import FilePool, raise_if_crashed, reserve_output_paths, tag_suffix  # noqa: E402
+from filenames import protocol_from_filename  # noqa: E402
 
 # ==========================================
 #        CONFIGURATION SECTION
@@ -49,7 +54,7 @@ BASELINE_WINDOW = 1.0         # Window before T0 to calculate baseline force
 # ==========================================
 
 T0_T1_PAIRS = []
-DEFAULT_MAX_WORKERS = max(1, min(8, (os.cpu_count() or 1)))
+DEFAULT_MAX_WORKERS = max(1, os.cpu_count() or 1)
 
 def select_files(title, file_types):
     root = tk.Tk()
@@ -160,7 +165,7 @@ def parse_filename(filename):
             day_index = parts.index(day)
             if day_index + 1 < len(parts) and day_index + 2 < len(parts):
                 plate_name = parts[day_index + 1]
-                protocol = parts[day_index + 2]
+                protocol = protocol_from_filename(filename)
                 return day, protocol, plate_name
         except ValueError: 
              pass 
@@ -676,7 +681,7 @@ def calculate_average_trace(data_list):
         return pd.DataFrame(columns=['Time (seconds)', 'Normalized Trace', 'Standard Deviation', 
                                     'Force (μN)', 'Force SD', 'Smoothed Force (μN)', 'Smoothed Force SD'])
 
-def generate_calculation_reference(df, t0_t1_pairs, output_dir, day, protocol):
+def generate_calculation_reference(df, t0_t1_pairs, output_dir, day, protocol, file_tag=""):
     """Generate a detailed calculation reference document with example calculations"""
     
     # Find any well with peak data
@@ -875,7 +880,7 @@ def generate_calculation_reference(df, t0_t1_pairs, output_dir, day, protocol):
     reference = [line.replace('μN', 'uN') for line in reference]
     
     # Write to file with explicit UTF-8 encoding
-    reference_path = os.path.join(output_dir, f"{day}_{protocol}_calculation_reference.md")
+    reference_path = os.path.join(output_dir, f"{day}_{protocol}_calculation_reference{tag_suffix(file_tag)}.md")
     with open(reference_path, 'w', encoding='utf-8') as f:
         f.write('\n'.join(reference))
     
@@ -966,11 +971,10 @@ def create_relaxation_summary(data_list):
         return pd.DataFrame()  # Return empty dataframe on error
 
 
-
-def process_and_combine(input_files, plate_map, output_dir, num_stims, max_recording_time, max_workers=DEFAULT_MAX_WORKERS):
+def process_and_combine(input_files, plate_map, output_dir, num_stims, max_recording_time, max_workers=DEFAULT_MAX_WORKERS,
+                        file_tag=""):
     del num_stims  # protocol count is already reflected in global T0_T1_PAIRS
     processed_data = {}
-    average_traces = {}
 
     input_files = list(input_files or [])
     if not input_files:
@@ -979,9 +983,9 @@ def process_and_combine(input_files, plate_map, output_dir, num_stims, max_recor
     workers = max_workers if max_workers and max_workers > 0 else DEFAULT_MAX_WORKERS
     ordered_results = [None] * len(input_files)
 
-    with ThreadPoolExecutor(max_workers=workers) as executor:
+    with FilePool(__file__, {"T0_T1_PAIRS": T0_T1_PAIRS}, min(workers, len(input_files))) as pool:
         futures = {
-            executor.submit(_process_single_file, input_file, plate_map, max_recording_time): idx
+            pool.submit("_process_single_file", input_file, plate_map, max_recording_time): idx
             for idx, input_file in enumerate(input_files)
         }
         for future in tqdm(as_completed(futures), total=len(futures), desc="Processing files"):
@@ -989,6 +993,7 @@ def process_and_combine(input_files, plate_map, output_dir, num_stims, max_recor
             try:
                 ordered_results[idx] = future.result()
             except Exception as e:
+                raise_if_crashed(e)
                 print(f"Error processing file {input_files[idx]}: {e}")
 
     for result in ordered_results:
@@ -1007,98 +1012,114 @@ def process_and_combine(input_files, plate_map, output_dir, num_stims, max_recor
             processed_data[(day, protocol)][condition].append(condition_df)
 
     # --- Output Generation ---
-    for (day, protocol), conditions in processed_data.items():
-        average_traces[(day, protocol)] = {}
-        for condition, data_list in conditions.items():
-            average_traces[(day, protocol)][condition] = calculate_average_trace(data_list)
-
-        # Output filename uses the CLEANED protocol name
-        output_filename = f"{day}_{protocol}_waveformkinetics.xlsx"
-        output_path = make_timestamped_path_if_exists(os.path.join(output_dir, output_filename))
-
-        print(f"Creating workbook for {day}_{protocol}")
-        wb = Workbook()
-        wb.remove(wb.active)
-
-        all_relaxation_data = []
-        all_twitches_data = []
-
-        for condition, data_list in conditions.items():
-            if not data_list:
-                continue
-
-            try:
-                combined_continuous = pd.concat(data_list, ignore_index=True)
-                if 'Time (seconds)' in combined_continuous.columns:
-                    combined_continuous['Time (seconds)'] = (combined_continuous['Time (seconds)'] * 100).round() / 100
-
-                # Filter data around peaks
-                filtered_data = []
-                for well in combined_continuous['Well'].unique():
-                    well_data = combined_continuous[combined_continuous['Well'] == well]
-                    if 'Stim Peak' in well_data.columns:
-                        stim_peak_times = well_data[well_data['Stim Peak'] == 1]['Time (seconds)']
-                        for peak_time in stim_peak_times:
-                            peak_time = round(peak_time * 100) / 100
-                            peak_window = well_data[
-                                (well_data['Time (seconds)'] >= peak_time - 1) &
-                                (well_data['Time (seconds)'] <= peak_time + 1)
-                            ]
-                            if not peak_window.empty:
-                                filtered_data.append(peak_window)
-
-                if filtered_data:
-                    filtered_combined = pd.concat(filtered_data, ignore_index=True)
-                    df_to_excel_sheet(wb, f"{condition}", filtered_combined)
-                else:
-                    df_to_excel_sheet(wb, f"{condition}", combined_continuous)
-
-                all_relaxation_data.extend(data_list)
-
-                twitches_data = extract_normalized_twitches(combined_continuous)
-                if not twitches_data.empty:
-                    all_twitches_data.append(twitches_data)
-
-            except Exception as e:
-                print(f"Error processing condition '{condition}': {e}")
-                continue
-
-        if conditions:
-            rep_traces_list = []
-            for cond in conditions.keys():
-                if cond in average_traces[(day, protocol)]:
-                    avg_trace = average_traces[(day, protocol)][cond]
-                    if not avg_trace.empty:
-                        avg_trace['Condition'] = cond
-                        rep_traces_list.append(avg_trace)
-
-            if rep_traces_list:
-                rep_traces_df = pd.concat(rep_traces_list, ignore_index=True)
-                df_to_excel_sheet(wb, "Representative Traces", rep_traces_df)
-
-        if all_relaxation_data:
-            relaxation_summary = create_relaxation_summary(all_relaxation_data)
-            if not relaxation_summary.empty:
-                df_to_excel_sheet(wb, "Relaxation Summary", relaxation_summary)
-
-        if all_twitches_data:
-            normalized_twitches = pd.concat(all_twitches_data, ignore_index=True)
-            df_to_excel_sheet(wb, "Normalized Twitches", normalized_twitches)
-
-        print(f"Saving workbook to {output_path}")
-        wb.save(output_path)
-
-        if 'combined_continuous' in locals() and combined_continuous is not None:
-            try:
-                if 'Stim Peak' in combined_continuous.columns:
-                    peak_wells = combined_continuous[combined_continuous['Stim Peak'] == 1]['Well'].unique()
-                    if len(peak_wells) > 0:
-                        generate_calculation_reference(combined_continuous, T0_T1_PAIRS, output_dir, day, protocol)
-            except Exception as e:
-                print(f"Error generating calculation reference: {e}")
+    group_items = list(processed_data.items())
+    # Names are picked up front so two groups mapping to the same file name
+    # (e.g. FF names ignore protocol) can't overwrite each other.
+    output_paths = reserve_output_paths([
+        os.path.join(output_dir, f"{day}_{protocol}_waveformkinetics{tag_suffix(file_tag)}.xlsx") for (day, protocol), _ in group_items
+    ])
+    with FilePool(__file__, {"T0_T1_PAIRS": T0_T1_PAIRS}, min(workers, len(group_items)) or 1) as pool:
+        group_futures = [
+            pool.submit("_write_group_output", day, protocol, conditions, output_dir, path, file_tag)
+            for ((day, protocol), conditions), path in zip(group_items, output_paths)
+        ]
+        for future in group_futures:
+            future.result()
 
 
-def run_75hz_analysis(input_files, plate_map_path, output_dir, max_workers=DEFAULT_MAX_WORKERS):
+def _write_group_output(day, protocol, conditions, output_dir, output_path, file_tag=""):
+    """Build and save the workbook (and reference doc) for one day/protocol."""
+    average_traces = {}
+    average_traces[(day, protocol)] = {}
+    for condition, data_list in conditions.items():
+        average_traces[(day, protocol)][condition] = calculate_average_trace(data_list)
+
+    # Output filename uses the CLEANED protocol name
+
+    print(f"Creating workbook for {day}_{protocol}")
+    wb = Workbook()
+    wb.remove(wb.active)
+
+    all_relaxation_data = []
+    all_twitches_data = []
+
+    for condition, data_list in conditions.items():
+        if not data_list:
+            continue
+
+        try:
+            combined_continuous = pd.concat(data_list, ignore_index=True)
+            if 'Time (seconds)' in combined_continuous.columns:
+                combined_continuous['Time (seconds)'] = (combined_continuous['Time (seconds)'] * 100).round() / 100
+
+            # Filter data around peaks
+            filtered_data = []
+            for well in combined_continuous['Well'].unique():
+                well_data = combined_continuous[combined_continuous['Well'] == well]
+                if 'Stim Peak' in well_data.columns:
+                    stim_peak_times = well_data[well_data['Stim Peak'] == 1]['Time (seconds)']
+                    for peak_time in stim_peak_times:
+                        peak_time = round(peak_time * 100) / 100
+                        peak_window = well_data[
+                            (well_data['Time (seconds)'] >= peak_time - 1) &
+                            (well_data['Time (seconds)'] <= peak_time + 1)
+                        ]
+                        if not peak_window.empty:
+                            filtered_data.append(peak_window)
+
+            if filtered_data:
+                filtered_combined = pd.concat(filtered_data, ignore_index=True)
+                df_to_excel_sheet(wb, f"{condition}", filtered_combined)
+            else:
+                df_to_excel_sheet(wb, f"{condition}", combined_continuous)
+
+            all_relaxation_data.extend(data_list)
+
+            twitches_data = extract_normalized_twitches(combined_continuous)
+            if not twitches_data.empty:
+                all_twitches_data.append(twitches_data)
+
+        except Exception as e:
+            print(f"Error processing condition '{condition}': {e}")
+            continue
+
+    if conditions:
+        rep_traces_list = []
+        for cond in conditions.keys():
+            if cond in average_traces[(day, protocol)]:
+                avg_trace = average_traces[(day, protocol)][cond]
+                if not avg_trace.empty:
+                    avg_trace['Condition'] = cond
+                    rep_traces_list.append(avg_trace)
+
+        if rep_traces_list:
+            rep_traces_df = pd.concat(rep_traces_list, ignore_index=True)
+            df_to_excel_sheet(wb, "Representative Traces", rep_traces_df)
+
+    if all_relaxation_data:
+        relaxation_summary = create_relaxation_summary(all_relaxation_data)
+        if not relaxation_summary.empty:
+            df_to_excel_sheet(wb, "Relaxation Summary", relaxation_summary)
+
+    if all_twitches_data:
+        normalized_twitches = pd.concat(all_twitches_data, ignore_index=True)
+        df_to_excel_sheet(wb, "Normalized Twitches", normalized_twitches)
+
+    print(f"Saving workbook to {output_path}")
+    wb.save(output_path)
+
+    if 'combined_continuous' in locals() and combined_continuous is not None:
+        try:
+            if 'Stim Peak' in combined_continuous.columns:
+                peak_wells = combined_continuous[combined_continuous['Stim Peak'] == 1]['Well'].unique()
+                if len(peak_wells) > 0:
+                    generate_calculation_reference(combined_continuous, T0_T1_PAIRS, output_dir, day, protocol, file_tag)
+        except Exception as e:
+            print(f"Error generating calculation reference: {e}")
+
+
+def run_75hz_analysis(input_files, plate_map_path, output_dir, max_workers=DEFAULT_MAX_WORKERS, file_tag=""):
+    """file_tag (e.g. a plate name) is appended to every output file name."""
     if not input_files:
         print("No input files provided. Exiting.")
         return
@@ -1118,7 +1139,8 @@ def run_75hz_analysis(input_files, plate_map_path, output_dir, max_workers=DEFAU
         raise RuntimeError(f"Error loading plate map: {e}") from e
 
     parse_stimulation_protocol(NUM_STIMS, MAX_RECORDING_TIME)
-    process_and_combine(input_files, plate_map, output_dir, NUM_STIMS, MAX_RECORDING_TIME, max_workers=max_workers)
+    process_and_combine(input_files, plate_map, output_dir, NUM_STIMS, MAX_RECORDING_TIME, max_workers=max_workers,
+                        file_tag=file_tag)
 
 def main():
     try:
